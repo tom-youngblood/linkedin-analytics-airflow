@@ -47,6 +47,18 @@ CREATE TABLE IF NOT EXISTS scrapes (
 )
 """)
 
+# Create engagers table
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS engagers (
+    engager_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scrape_id INTEGER,
+    linkedin_url TEXT,
+    engagement_type TEXT,
+    pushed_to_hubspot BOOLEAN DEFAULT 0,
+    FOREIGN KEY (scrape_id) REFERENCES scrapes(scrape_id)
+);
+""")
+
 # Ingest posts and post_name from DF
 for _, row in links.iterrows():
     cursor.execute("""
