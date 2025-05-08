@@ -87,7 +87,10 @@ def main():
             engager_id INTEGER PRIMARY KEY AUTOINCREMENT,
             scrape_id INTEGER,
             linkedin_url TEXT,
+            name TEXT,
+            headline TEXT,
             engagement_type TEXT,
+            post_url TEXT,
             pushed_to_hubspot BOOLEAN DEFAULT 0,
             FOREIGN KEY (scrape_id) REFERENCES scrapes(scrape_id)
         );
