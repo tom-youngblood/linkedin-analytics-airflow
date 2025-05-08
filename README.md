@@ -36,6 +36,18 @@ CREATE TABLE IF NOT EXISTS scrapes (
     status TEXT,
     FOREIGN KEY (post_url) REFERENCES posts(post_url)
 );
+
+
+CREATE TABLE engagers (
+  engager_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scrape_id INTEGER,
+  linkedin_url TEXT,
+  name TEXT,
+  headline TEXT,
+  engagement_type TEXT,
+  pushed_to_hubspot BOOLEAN DEFAULT 0,
+  FOREIGN KEY (scrape_id) REFERENCES scrapes (scrape_id)
+)
 ```
 
 ## Google Sheets Ingestion Logic
