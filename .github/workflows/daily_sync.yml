@@ -25,7 +25,8 @@ jobs:
 
     - name: Create necessary directories
       run: |
-        mkdir -p data logs
+        mkdir -p data
+        mkdir -p scripts/logs
         touch data/post_scrapes.db  # Create empty db if it doesn't exist
 
     - name: Download database
