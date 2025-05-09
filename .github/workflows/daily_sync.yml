@@ -23,6 +23,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
+    - name: Create necessary directories
+      run: |
+        mkdir -p data logs
+        touch data/post_scrapes.db  # Create empty db if it doesn't exist
+
     - name: Download database
       uses: actions/download-artifact@v3
       with:
