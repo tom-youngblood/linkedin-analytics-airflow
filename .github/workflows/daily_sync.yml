@@ -29,7 +29,7 @@ jobs:
         touch data/post_scrapes.db  # Create empty db if it doesn't exist
 
     - name: Download database
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: post_scrapes.db
         path: data/
@@ -64,7 +64,7 @@ jobs:
         echo "HubSpot sync completed"
 
     - name: Upload database
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: post_scrapes.db
         path: data/post_scrapes.db
