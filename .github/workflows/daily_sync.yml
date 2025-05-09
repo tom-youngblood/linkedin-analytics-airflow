@@ -1,0 +1,65 @@
+name: Daily LinkedIn to HubSpot Sync
+
+on:
+  schedule:
+    # Run at a random time between 9 AM and 5 PM UTC on weekdays
+    - cron: '0 9-17 * * 1-5'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Download database
+      uses: actions/download-artifact@v3
+      with:
+        name: post_scrapes.db
+        path: data/
+      continue-on-error: true  # Continue if no previous artifact exists
+        
+    - name: Pull posts from Google Sheets
+      env:
+        GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+      run: |
+        cd scripts
+        echo "Starting Google Sheets sync..."
+        python gs_sql.py
+        echo "Google Sheets sync completed"
+        
+    - name: Scrape LinkedIn posts
+      env:
+        APIFY_API_KEY: ${{ secrets.APIFY_API_KEY }}
+      run: |
+        cd scripts
+        echo "Starting LinkedIn scraping..."
+        python scrape.py
+        echo "LinkedIn scraping completed"
+        
+    - name: Sync with HubSpot
+      env:
+        APIFY_API_KEY: ${{ secrets.APIFY_API_KEY }}
+        HUBSPOT_API_KEY: ${{ secrets.HUBSPOT_API_KEY }}
+      run: |
+        cd scripts
+        echo "Starting HubSpot sync..."
+        python sql_hs.py
+        echo "HubSpot sync completed"
+
+    - name: Upload database
+      uses: actions/upload-artifact@v3
+      with:
+        name: post_scrapes.db
+        path: data/post_scrapes.db
+        retention-days: 90  # Keep the artifact for 90 days
