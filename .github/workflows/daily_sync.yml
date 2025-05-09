@@ -4,6 +4,7 @@ on:
   schedule:
     # Run at a random time between 9 AM and 5 PM UTC on weekdays
     - cron: '0 9-17 * * 1-5'
+  workflow_dispatch:
 
 jobs:
   sync:
