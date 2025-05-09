@@ -1,23 +1,53 @@
-# Organic Social Pipeline v2
+# Organic Social Pipeline v2 
 
-A pipeline for ingesting LinkedIn post data from Google Sheets, storing and updating it in SQLite, scraping post data, and integrating with HubSpot. Designed for automation and efficient scaling.
+**Automate, Integrate, and Scale LinkedIn Lead Generation**
 
-## Overview
-This project automates the process of:
-- Syncing LinkedIn post data from a Google Sheet to a local SQLite database
-- Deduplicating and updating post names as needed
-- Scraping post data and storing results
-- Pushing unique leads to HubSpot
-- Running on a schedule via GitHub Actions
+---
 
-## Architecture
-- **Google Sheets**: Source of LinkedIn post URLs and names; easy for Creative Team to interact with and update.
-- **Python Scripts**: For data ingestion, scraping, and integration
-- **SQLite**: Local database for posts and scrape results
-- **HubSpot**: Receives unique leads
-- **GitHub Actions**: Schedules and runs the pipeline
+## ✨ What is This?
+A robust, fully-automated pipeline that:
+- **Syncs LinkedIn post data from Google Sheets** (for accessibilty of non-technical users)
+- **Scrapes post engagement data** using Apify, not your own LinkedIn account and cookies--no risk!
+- **Stores and deduplicates everything in SQLite**
+- **Pushes unique leads to HubSpot**
+- **Runs itself daily via GitHub Actions**-—no manual intervention required!
+- **Persists your database as a GitHub artifact** for reliable, stateful automation
 
-## SQL Schema
+---
+
+## 🏗️ Architecture & Flow
+
+```mermaid
+graph TD;
+    A[Google Sheets] -->|Sync| B(Sync Script: gs_sql.py)
+    B -->|Update| C[SQLite DB]
+    C -->|Select| D(Scrape Script: scrape.py)
+    D -->|Scrape & Store| C
+    C -->|Find New Leads| E(HubSpot Sync: sql_hs.py)
+    E -->|Push| F[HubSpot]
+    C -->|Persist| G[GitHub Artifact]
+    G -->|Restore| C
+```
+
+- **Google Sheets**: Source of truth for LinkedIn post URLs/names
+- **Python Scripts**: Modular, reliable, and easy to extend
+- **SQLite**: Fast, portable, and versioned via GitHub Artifacts
+- **HubSpot**: Receives only new, unique leads
+- **GitHub Actions**: Schedules, runs, and persists everything
+
+---
+
+## 🛠️ Key Features
+- **No Duplicates**: Deduplication at every step
+- **Automatic Scheduling**: Runs daily, M–F, at a random time (UTC 9–17)
+- **Stateful**: Database is uploaded/downloaded as an artifact—no data loss
+- **Robust Logging**: All scripts log to timestamped files for easy debugging
+- **Non-Technical Friendly**: Creative team updates a Google Sheet, pipeline does the rest
+- **Easy to Extend**: Modular scripts for each stage
+
+---
+
+## 📝 SQL Schema
 ```sql
 CREATE TABLE IF NOT EXISTS posts (
     post_url TEXT PRIMARY KEY,
@@ -37,7 +67,6 @@ CREATE TABLE IF NOT EXISTS scrapes (
     FOREIGN KEY (post_url) REFERENCES posts(post_url)
 );
 
-
 CREATE TABLE engagers (
   engager_id INTEGER PRIMARY KEY AUTOINCREMENT,
   scrape_id INTEGER,
@@ -50,42 +79,74 @@ CREATE TABLE engagers (
 )
 ```
 
-## Google Sheets Ingestion Logic
-- Loads all posts and post names from Google Sheets into a DataFrame
-- Ingests all new post and post_name values into the SQLite database
-- Deduplicates on `post_url` (no duplicate posts)
-- Updates `post_name` if it changes for an existing `post_url`
+---
 
-## Setup
-1. Clone the repository
-2. Create a virtual environment and install dependencies
-3. Set up your `.env` file with Google Sheets credentials (see scripts/encode_credentials.py for encoding instructions)
-4. Run the ingestion script in `/scripts` to populate your database
-5. Use the VSCode SQLite extension or DB Browser for SQLite to inspect your data
+## ⚡️ How It Works (Workflow)
+1. **Restore DB**: Downloads the latest `post_scrapes.db` from GitHub Artifacts
+2. **Google Sheets Sync**: `gs_sql.py` pulls new posts/names, deduplicates, and updates the DB
+3. **Scrape**: `scrape.py` scrapes LinkedIn post engagement, stores results in DB
+4. **HubSpot Sync**: `sql_hs.py` finds new leads and pushes them to HubSpot
+5. **Persist DB**: Uploads the updated DB as an artifact for the next run
+6. **Logging**: Each script writes detailed logs to `scripts/logs/`
 
-## Implementation Steps
-1. Set Up the New Repository
-    - Create a new GitHub repo: organic-social-pipeline-v2
-    - Add a README.md describing the new architecture and flow
-2. Initialize the Project Structure
-    - Add directories: `/scripts`, `/data`, `/docs`
-    - Add .gitignore (ignore .db files, credentials, etc.)
-3. Set Up SQLite Database
-    - Write a script to initialize the SQLite DB with the posts and scrapes tables
-    - Optionally, add a migration or schema management script
-4. Google Sheets Integration
-    - Use gspread or pandas to read the LinkedIn posts list from Google Sheets
-    - Write a script to sync new posts from the sheet into the posts table (see above)
-5. Scraping Logic
-    - Write a script to query the DB for the best post to scrape, call the Apify actor, parse/store results, and update posts
-6. HubSpot Integration
-    - Write a script to identify new/unique leads from the latest scrapes and push them to HubSpot via API
-7. Scheduling with GitHub Actions
-    - Create a workflow to run 3x daily at random times between 9-5
-    - Ensure the workflow installs dependencies, runs your scripts, and persists the SQLite DB as an artifact if needed
-8. Documentation
-    - Document your setup, environment variables, and usage in README.md
-    - Add your flowchart to /docs
-9. (Optional) Error Handling & Logging
-    - Add logging to your scripts
-    - Handle and record failed scrapes in the scrapes table (status column)
+---
+
+## 🚀 Quickstart
+1. **Clone the repo**
+2. **Install dependencies**
+   ```bash
+   python -m venv venv
+   source venv/bin/activate
+   pip install -r requirements.txt
+   ```
+3. **Set up your `.env` and Google credentials**
+   - See `scripts/encode_credentials.py` for encoding instructions
+   - Add your Google Sheets, Apify, and HubSpot API keys
+4. **Run locally (for testing)**
+   ```bash
+   cd scripts
+   python gs_sql.py
+   python scrape.py
+   python sql_hs.py
+   ```
+5. **Automate with GitHub Actions**
+   - Add your secrets (`SERVICE_ACCOUNT_KEY`, `APIFY_API_KEY`, `HUBSPOT_API_KEY`) in the repo settings
+   - The workflow will run automatically and persist your DB
+
+---
+
+## 🧩 Scripts Overview
+- **gs_sql.py**: Syncs Google Sheets → SQLite
+- **scrape.py**: Scrapes LinkedIn post engagement → SQLite
+- **sql_hs.py**: Pushes new leads from SQLite → HubSpot
+- **utils.py**: Shared helpers for scraping, ingestion, and HubSpot API
+
+---
+
+## 🛡️ Reliability & Extensibility
+- **Risk free LinkedIn Scraping**: Uses external accounts, cookies, and IPs
+- **Database never lost**: Always restored/uploaded as an artifact
+- **Logs for every run**: Debug and audit with ease
+- **Easy to add new sources or destinations**: Just add a script and update the workflow
+
+---
+
+## 👩‍💻 For Non-Technical Users
+- Just update the Google Sheet—no code, no problem!
+- All syncing, scraping, and pushing is fully automated
+
+---
+
+## 📈 Why Use This Pipeline?
+- **Save time**: No more manual copy-paste or lead uploads
+- **Reduce errors**: Automation means fewer mistakes
+- **Scale easily**: Add more posts, more scrapes, or more destinations
+- **Audit everything**: Logs and database history are always available
+
+---
+
+## 📝 Documentation & Support
+- See `/docs` for flowcharts and advanced usage
+- Open an issue or PR for help or improvements
+
+---
