@@ -50,11 +50,11 @@ def main():
     hubspot_engagers = utils.hubspot_fetch_list_contacts(hs_api_key, url, properties).rename(columns={"hs_linkedin_url": "linkedin_url"})
     logger.info(f"Got HubSpot Engagers (list #{list_number}):\n{hubspot_engagers}")
 
-    # Merge and keep all local_engagers, adding columns from hubspot_engagers where linkedin_url matches
-    merged = pd.merge(local_engagers, hubspot_engagers, on="linkedin_url", how="left", indicator=True)
-
-    # Only keep those where there was no match in hubspot_engagers
-    engagers_to_upload = merged[merged["_merge"] == "left_only"].drop(columns="_merge")
+    # Get list of LinkedIn URLs that are already in HubSpot
+    existing_urls = set(hubspot_engagers['linkedin_url'].dropna().unique())
+    
+    # Filter out engagers that are already in HubSpot
+    engagers_to_upload = local_engagers[~local_engagers['linkedin_url'].isin(existing_urls)]
     logger.info(f"Subset of engagers to upload:\n{engagers_to_upload}")
     
     # Map local property names to hubspot property names
