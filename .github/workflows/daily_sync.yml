@@ -2,8 +2,8 @@ name: Daily LinkedIn to HubSpot Sync
 
 on:
   schedule:
-    # Run at a random time between 9 AM and 5 PM UTC on weekdays
-    - cron: '0 9-17 * * 1-5'
+    # Run once daily at a random time between 9 AM and 5 PM UTC on weekdays
+    - cron: '0 9 * * 1-5'  # This will run at 9 AM UTC, and we'll use a random delay
   workflow_dispatch:
 
 jobs:
@@ -28,6 +28,13 @@ jobs:
         mkdir -p data
         mkdir -p scripts/logs
         touch data/post_scrapes.db  # Create empty db if it doesn't exist
+
+    - name: Random delay
+      run: |
+        # Generate random delay between 0 and 8 hours (9 AM to 5 PM)
+        DELAY=$((RANDOM % 28800))
+        echo "Sleeping for $DELAY seconds..."
+        sleep $DELAY
 
     - name: Download database
       uses: actions/download-artifact@v4
