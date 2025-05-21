@@ -2,8 +2,10 @@ name: Daily LinkedIn to HubSpot Sync
 
 on:
   schedule:
-    # Run once daily at a random time between 9 AM and 5 PM UTC on weekdays
-    - cron: '0 9 * * 1-5'  # This will run at 9 AM UTC, and we'll use a random delay
+    # Run 3x daily at random times between 9 AM and 5 PM UTC on weekdays
+    - cron: '0 9 * * 1-5'   # First run at 9 AM
+    - cron: '0 12 * * 1-5'  # Second run at 12 PM
+    - cron: '0 15 * * 1-5'  # Third run at 3 PM
   workflow_dispatch:
 
 jobs:
@@ -27,15 +29,43 @@ jobs:
       run: |
         mkdir -p data
         mkdir -p scripts/logs
-        touch data/post_scrapes.db  # Create empty db if it doesn't exist
+        # Create empty db if it doesn't exist
+        if [ ! -f data/post_scrapes.db ]; then
+          touch data/post_scrapes.db
+          echo "Created new empty database"
+        fi
+
+    - name: Calculate random delay
+      id: delay
+      run: |
+        # Get the hour from the schedule
+        SCHEDULE_HOUR=$(echo "${{ github.event.schedule }}" | grep -o '[0-9]\+')
+        
+        # Calculate random delay between 1-3 hours (3600-10800 seconds)
+        RANDOM_DELAY=$((3600 + RANDOM % 7200))
+        
+        # Calculate maximum delay to stay within 5 PM
+        MAX_DELAY=$((17 - SCHEDULE_HOUR))
+        MAX_DELAY_SECONDS=$((MAX_DELAY * 3600))
+        
+        # Use the smaller of the two delays
+        if [ $RANDOM_DELAY -gt $MAX_DELAY_SECONDS ]; then
+          FINAL_DELAY=$MAX_DELAY_SECONDS
+        else
+          FINAL_DELAY=$RANDOM_DELAY
+        fi
+        
+        echo "Schedule hour: $SCHEDULE_HOUR"
+        echo "Random delay: $RANDOM_DELAY seconds"
+        echo "Max delay: $MAX_DELAY_SECONDS seconds"
+        echo "Final delay: $FINAL_DELAY seconds"
+        echo "delay=$FINAL_DELAY" >> $GITHUB_OUTPUT
 
     - name: Random delay
       run: |
-        # Generate random delay between 0 and 8 hours (9 AM to 5 PM)
-        DELAY=$((RANDOM % 28800))
-        echo "Sleeping for $DELAY seconds..."
-        sleep $DELAY
-
+        echo "Sleeping for ${{ steps.delay.outputs.delay }} seconds..."
+        sleep ${{ steps.delay.outputs.delay }}
+        
     - name: Download database
       uses: actions/download-artifact@v4
       with:
