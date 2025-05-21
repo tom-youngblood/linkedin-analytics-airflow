@@ -7,6 +7,7 @@ on:
     - cron: '0 12 * * 1-5'  # Second run at 12 PM
     - cron: '0 15 * * 1-5'  # Third run at 3 PM
   workflow_dispatch:
+    description: 'Manually trigger the LinkedIn to HubSpot sync'
 
 jobs:
   sync:
@@ -37,6 +38,7 @@ jobs:
 
     - name: Calculate random delay
       id: delay
+      if: github.event_name == 'schedule'  # Only calculate delay for scheduled runs
       run: |
         # Get the hour from the schedule
         SCHEDULE_HOUR=$(echo "${{ github.event.schedule }}" | grep -o '[0-9]\+')
@@ -62,6 +64,7 @@ jobs:
         echo "delay=$FINAL_DELAY" >> $GITHUB_OUTPUT
 
     - name: Random delay
+      if: github.event_name == 'schedule'  # Only delay for scheduled runs
       run: |
         echo "Sleeping for ${{ steps.delay.outputs.delay }} seconds..."
         sleep ${{ steps.delay.outputs.delay }}
