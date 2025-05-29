@@ -26,13 +26,7 @@ jobs:
 
     - name: Create necessary directories
       run: |
-        mkdir -p data
         mkdir -p scripts/logs
-        # Create empty db if it doesn't exist
-        if [ ! -f data/post_scrapes.db ]; then
-          touch data/post_scrapes.db
-          echo "Created new empty database"
-        fi
 
     - name: Calculate random delay
       id: delay
@@ -49,16 +43,14 @@ jobs:
         echo "Sleeping for ${{ steps.delay.outputs.delay }} seconds..."
         sleep ${{ steps.delay.outputs.delay }}
         
-    - name: Download database
-      uses: actions/download-artifact@v4
-      with:
-        name: post_scrapes.db
-        path: data/
-      continue-on-error: true  # Continue if no previous artifact exists
-        
     - name: Pull posts from Google Sheets
       env:
         SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+        DB_HOST: ${{ secrets.DB_HOST }}
+        DB_PORT: ${{ secrets.DB_PORT }}
+        DB_NAME: ${{ secrets.DB_NAME }}
+        DB_USER: ${{ secrets.DB_USER }}
+        DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
       run: |
         cd scripts
         echo "Starting Google Sheets sync..."
@@ -68,6 +60,11 @@ jobs:
     - name: Scrape LinkedIn posts
       env:
         APIFY_API_KEY: ${{ secrets.APIFY_API_KEY }}
+        DB_HOST: ${{ secrets.DB_HOST }}
+        DB_PORT: ${{ secrets.DB_PORT }}
+        DB_NAME: ${{ secrets.DB_NAME }}
+        DB_USER: ${{ secrets.DB_USER }}
+        DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
       run: |
         cd scripts
         echo "Starting LinkedIn scraping..."
@@ -78,15 +75,13 @@ jobs:
       env:
         APIFY_API_KEY: ${{ secrets.APIFY_API_KEY }}
         HUBSPOT_API_KEY: ${{ secrets.HUBSPOT_API_KEY }}
+        DB_HOST: ${{ secrets.DB_HOST }}
+        DB_PORT: ${{ secrets.DB_PORT }}
+        DB_NAME: ${{ secrets.DB_NAME }}
+        DB_USER: ${{ secrets.DB_USER }}
+        DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
       run: |
         cd scripts
         echo "Starting HubSpot sync..."
         python sql_hs.py
         echo "HubSpot sync completed"
-
-    - name: Upload database
-      uses: actions/upload-artifact@v4
-      with:
-        name: post_scrapes.db
-        path: data/post_scrapes.db
-        retention-days: 90  # Keep the artifact for 90 days

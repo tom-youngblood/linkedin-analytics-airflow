@@ -1,4 +1,3 @@
-import sqlite3
 import pandas as pd
 import gspread
 from dotenv import load_dotenv
@@ -7,6 +6,7 @@ import base64
 import os
 import logging
 from datetime import datetime
+import utils
 
 # Configure logging
 logging.basicConfig(
@@ -42,14 +42,14 @@ def main():
         logger.error(f"Failed to connect to Google Sheets: {str(e)}")
         raise
 
-    # Connect to SQLite database
-    logger.info("Connecting to SQLite database")
+    # Connect to PostgreSQL database
+    logger.info("Connecting to PostgreSQL database")
     try:
-        conn = sqlite3.connect('../data/post_scrapes.db')
-        cursor = conn.cursor()
-        logger.info("Successfully connected to SQLite database")
+        conn = utils.get_db_connection()
+        cursor = utils.get_db_cursor(conn)
+        logger.info("Successfully connected to PostgreSQL database")
     except Exception as e:
-        logger.error(f"Failed to connect to SQLite database: {str(e)}")
+        logger.error(f"Failed to connect to PostgreSQL database: {str(e)}")
         raise
 
     # Create tables
@@ -57,43 +57,45 @@ def main():
     try:
         # Create posts table
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS posts (
-            post_url TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS linkedin_posts (
+            id SERIAL PRIMARY KEY,
+            post_url TEXT UNIQUE,
             post_name TEXT,
-            last_scraped_at TEXT,
-            scrape_count INTEGER,
-            total_reactions INTEGER
+            last_scraped_at TIMESTAMP,
+            scrape_count INTEGER DEFAULT 0,
+            total_reactions INTEGER DEFAULT 0
         )
         """)
         logger.debug("Created/verified posts table")
 
         # Create scrapes table
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS scrapes (
-            scrape_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        CREATE TABLE IF NOT EXISTS linkedin_posts_scrapes (
+            id SERIAL PRIMARY KEY,
             post_url TEXT,
-            ran_at TEXT,
+            ran_at TIMESTAMP,
             reactions_count INTEGER,
             cost REAL,
             status TEXT,
-            FOREIGN KEY (post_url) REFERENCES posts(post_url)
+            FOREIGN KEY (post_url) REFERENCES linkedin_posts(post_url)
         )
         """)
         logger.debug("Created/verified scrapes table")
 
         # Create engagers table
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS engagers (
-            engager_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        CREATE TABLE IF NOT EXISTS linkedin_engagers (
+            id SERIAL PRIMARY KEY,
             scrape_id INTEGER,
             linkedin_url TEXT,
             name TEXT,
             headline TEXT,
             engagement_type TEXT,
             post_url TEXT,
-            pushed_to_hubspot BOOLEAN DEFAULT 0,
-            FOREIGN KEY (scrape_id) REFERENCES scrapes(scrape_id)
-        );
+            pushed_to_hubspot BOOLEAN DEFAULT FALSE,
+            FOREIGN KEY (scrape_id) REFERENCES linkedin_posts_scrapes(id),
+            UNIQUE(linkedin_url, post_url)
+        )
         """)
         logger.debug("Created/verified engagers table")
     except Exception as e:
@@ -101,8 +103,12 @@ def main():
         raise
 
     # Get existing post URLs before ingestion
-    cursor.execute("SELECT post_url FROM posts")
-    existing_urls = {row[0] for row in cursor.fetchall()}
+    existing_urls = utils.log_query_results(
+        cursor,
+        "Existing posts query",
+        "SELECT post_url FROM linkedin_posts"
+    )
+    existing_urls = {row['post_url'] for row in existing_urls}
     logger.info(f"Found {len(existing_urls)} existing posts in database")
 
     # Ingest posts and post_name from DF
@@ -114,9 +120,9 @@ def main():
         for _, row in links.iterrows():
             is_new = row['link'] not in existing_urls
             cursor.execute("""
-                INSERT INTO posts (post_url, post_name, last_scraped_at, scrape_count, total_reactions)
-                VALUES (?, ?, NULL, 0, 0)
-                ON CONFLICT(post_url) DO UPDATE SET post_name=excluded.post_name
+                INSERT INTO linkedin_posts (post_url, post_name, last_scraped_at, scrape_count, total_reactions)
+                VALUES (%s, %s, NULL, 0, 0)
+                ON CONFLICT(post_url) DO UPDATE SET post_name=EXCLUDED.post_name
             """, (row['link'], row['post']))
             
             if is_new:
@@ -126,18 +132,28 @@ def main():
                 
         conn.commit()
         logger.info(f"Post ingestion completed: {new_posts} new posts added, {updated_posts} existing posts updated")
+
+        # Log final state after ingestion
+        utils.log_query_results(
+            cursor,
+            "Final posts count",
+            "SELECT COUNT(*) as count FROM linkedin_posts"
+        )
+        utils.log_query_results(
+            cursor,
+            "Recent posts",
+            "SELECT post_url, post_name, last_scraped_at, scrape_count FROM linkedin_posts ORDER BY id DESC LIMIT 5"
+        )
+
     except Exception as e:
         logger.error(f"Failed to ingest posts: {str(e)}")
         raise
 
     # Close database connection
     logger.info("Closing database connection")
+    cursor.close()
     conn.close()
     logger.info("Script execution completed successfully")
 
 if __name__ == "__main__":
     main()
-
-
-
-

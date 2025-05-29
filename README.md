@@ -8,10 +8,10 @@
 A robust, fully-automated pipeline that:
 - **Syncs LinkedIn post data from Google Sheets** (for accessibilty of non-technical users)
 - **Scrapes post engagement data** using Apify, not your own LinkedIn account and cookies--no risk!
-- **Stores and deduplicates everything in SQLite**
+- **Stores and deduplicates everything in PostgreSQL**
 - **Pushes unique leads to HubSpot**
 - **Runs itself daily via GitHub Actions**-—no manual intervention required!
-- **Persists your database as a GitHub artifact** for reliable, stateful automation
+- **Uses AWS RDS for reliable, stateful automation**
 
 ---
 
@@ -20,27 +20,25 @@ A robust, fully-automated pipeline that:
 ```mermaid
 graph TD;
     A[Google Sheets] -->|Sync| B(Sync Script: gs_sql.py)
-    B -->|Update| C[SQLite DB]
+    B -->|Update| C[PostgreSQL DB]
     C -->|Select| D(Scrape Script: scrape.py)
     D -->|Scrape & Store| C
     C -->|Find New Leads| E(HubSpot Sync: sql_hs.py)
     E -->|Push| F[HubSpot]
-    C -->|Persist| G[GitHub Artifact]
-    G -->|Restore| C
 ```
 
 - **Google Sheets**: Source of truth for LinkedIn post URLs/names
 - **Python Scripts**: Modular, reliable, and easy to extend
-- **SQLite**: Fast, portable, and versioned via GitHub Artifacts
+- **PostgreSQL**: Robust, scalable database hosted on AWS RDS
 - **HubSpot**: Receives only new, unique leads
-- **GitHub Actions**: Schedules, runs, and persists everything
+- **GitHub Actions**: Schedules and runs the pipeline
 
 ---
 
 ## 🛠️ Key Features
 - **No Duplicates**: Deduplication at every step
 - **Automatic Scheduling**: Runs daily, M–F, at a random time (UTC 9–17)
-- **Stateful**: Database is uploaded/downloaded as an artifact—no data loss
+- **Stateful**: Database hosted on AWS RDS—no data loss
 - **Robust Logging**: All scripts log to timestamped files for easy debugging
 - **Non-Technical Friendly**: Creative team updates a Google Sheet, pipeline does the rest
 - **Easy to Extend**: Modular scripts for each stage
@@ -49,45 +47,46 @@ graph TD;
 
 ## 📝 SQL Schema
 ```sql
-CREATE TABLE IF NOT EXISTS posts (
-    post_url TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS linkedin_posts (
+    id SERIAL PRIMARY KEY,
+    post_url TEXT UNIQUE,
     post_name TEXT,
-    last_scraped_at TEXT,
-    scrape_count INTEGER,
-    total_reactions INTEGER
+    last_scraped_at TIMESTAMP,
+    scrape_count INTEGER DEFAULT 0,
+    total_reactions INTEGER DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS scrapes (
-    scrape_id INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE IF NOT EXISTS linkedin_posts_scrapes (
+    id SERIAL PRIMARY KEY,
     post_url TEXT,
-    ran_at TEXT,
+    ran_at TIMESTAMP,
     reactions_count INTEGER,
     cost REAL,
     status TEXT,
-    FOREIGN KEY (post_url) REFERENCES posts(post_url)
+    FOREIGN KEY (post_url) REFERENCES linkedin_posts(post_url)
 );
 
-CREATE TABLE engagers (
-  engager_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  scrape_id INTEGER,
-  linkedin_url TEXT,
-  name TEXT,
-  headline TEXT,
-  engagement_type TEXT,
-  pushed_to_hubspot BOOLEAN DEFAULT 0,
-  FOREIGN KEY (scrape_id) REFERENCES scrapes (scrape_id)
-)
+CREATE TABLE IF NOT EXISTS linkedin_engagers (
+    id SERIAL PRIMARY KEY,
+    scrape_id INTEGER,
+    linkedin_url TEXT,
+    name TEXT,
+    headline TEXT,
+    engagement_type TEXT,
+    post_url TEXT,
+    pushed_to_hubspot BOOLEAN DEFAULT FALSE,
+    FOREIGN KEY (scrape_id) REFERENCES linkedin_posts_scrapes(id),
+    UNIQUE(linkedin_url, post_url)
+);
 ```
 
 ---
 
 ## ⚡️ How It Works (Workflow)
-1. **Restore DB**: Downloads the latest `post_scrapes.db` from GitHub Artifacts
-2. **Google Sheets Sync**: `gs_sql.py` pulls new posts/names, deduplicates, and updates the DB
-3. **Scrape**: `scrape.py` scrapes LinkedIn post engagement, stores results in DB
-4. **HubSpot Sync**: `sql_hs.py` finds new leads and pushes them to HubSpot
-5. **Persist DB**: Uploads the updated DB as an artifact for the next run
-6. **Logging**: Each script writes detailed logs to `scripts/logs/`
+1. **Google Sheets Sync**: `gs_sql.py` pulls new posts/names, deduplicates, and updates the DB
+2. **Scrape**: `scrape.py` scrapes LinkedIn post engagement, stores results in DB
+3. **HubSpot Sync**: `sql_hs.py` finds new leads and pushes them to HubSpot
+4. **Logging**: Each script writes detailed logs to `scripts/logs/`
 
 ---
 
@@ -99,9 +98,17 @@ CREATE TABLE engagers (
    source venv/bin/activate
    pip install -r requirements.txt
    ```
-3. **Set up your `.env` and Google credentials**
-   - See `scripts/encode_credentials.py` for encoding instructions
-   - Add your Google Sheets, Apify, and HubSpot API keys
+3. **Set up your environment variables**
+   ```
+   DB_HOST=your_rds_host
+   DB_PORT=5432
+   DB_NAME=your_db_name
+   DB_USER=your_db_user
+   DB_PASSWORD=your_db_password
+   SERVICE_ACCOUNT_KEY=your_google_sheets_key
+   APIFY_API_KEY=your_apify_key
+   HUBSPOT_API_KEY=your_hubspot_key
+   ```
 4. **Run locally (for testing)**
    ```bash
    cd scripts
@@ -110,22 +117,22 @@ CREATE TABLE engagers (
    python sql_hs.py
    ```
 5. **Automate with GitHub Actions**
-   - Add your secrets (`SERVICE_ACCOUNT_KEY`, `APIFY_API_KEY`, `HUBSPOT_API_KEY`) in the repo settings
-   - The workflow will run automatically and persist your DB
+   - Add your secrets in the repo settings
+   - The workflow will run automatically
 
 ---
 
 ## 🧩 Scripts Overview
-- **gs_sql.py**: Syncs Google Sheets → SQLite
-- **scrape.py**: Scrapes LinkedIn post engagement → SQLite
-- **sql_hs.py**: Pushes new leads from SQLite → HubSpot
+- **gs_sql.py**: Syncs Google Sheets → PostgreSQL
+- **scrape.py**: Scrapes LinkedIn post engagement → PostgreSQL
+- **sql_hs.py**: Pushes new leads from PostgreSQL → HubSpot
 - **utils.py**: Shared helpers for scraping, ingestion, and HubSpot API
 
 ---
 
 ## 🛡️ Reliability & Extensibility
 - **Risk free LinkedIn Scraping**: Uses external accounts, cookies, and IPs
-- **Database never lost**: Always restored/uploaded as an artifact
+- **Database hosted on AWS RDS**: Reliable and scalable
 - **Logs for every run**: Debug and audit with ease
 - **Easy to add new sources or destinations**: Just add a script and update the workflow
 

@@ -1,4 +1,3 @@
-import sqlite3
 import pandas as pd
 import logging
 from datetime import datetime
@@ -22,25 +21,44 @@ def main():
     logger.info("Loading environment variables")
     load_dotenv()
 
-    # Connect to SQLite database
-    logger.info("Connecting to SQLite database")
+    # Connect to PostgreSQL database
+    logger.info("Connecting to PostgreSQL database")
     try:
-        conn = sqlite3.connect('../data/post_scrapes.db')
-        logger.info("Successfully connected to SQLite database")
+        conn = utils.get_db_connection()
+        cursor = utils.get_db_cursor(conn)
+        logger.info("Successfully connected to PostgreSQL database")
     except Exception as e:
-        logger.error(f"Failed to connect to SQLite database: {str(e)}")
+        logger.error(f"Failed to connect to PostgreSQL database: {str(e)}")
         raise
 
     # Get distinct local engagers to upload to HubSpot
-    local_engagers = pd.read_sql_query("""
-    SELECT DISTINCT e.linkedin_url, e.name, e.headline, MIN(p.post_name) as post_name
-    FROM engagers e
-    JOIN posts p on e.post_url=p.post_url
-    GROUP BY e.linkedin_url, e.name, e.headline
-    """, conn)
+    local_engagers = utils.log_query_results(
+        cursor,
+        "Local engagers query",
+        """
+        SELECT DISTINCT e.linkedin_url, e.name, e.headline, MIN(p.post_name) as post_name
+        FROM linkedin_engagers e
+        JOIN linkedin_posts p on e.post_url=p.post_url
+        GROUP BY e.linkedin_url, e.name, e.headline
+        """
+    )
+    local_engagers = pd.DataFrame(local_engagers, columns=["linkedin_url", "name", "headline", "post_name"])
     local_engagers["firstname"] = local_engagers["name"].apply(lambda x: str(x).split()[0] if pd.notnull(x) and str(x).strip() else "")
     local_engagers["lastname"] = local_engagers["name"].apply(lambda x: " ".join(str(x).split()[1:]) if pd.notnull(x) and len(str(x).split()) > 1 else "")
     logger.info(f"Got local engagers:\n{local_engagers}")
+
+    # Log engager statistics
+    utils.log_query_results(
+        cursor,
+        "Engager statistics",
+        """
+        SELECT 
+            COUNT(DISTINCT e.linkedin_url) as total_engagers,
+            COUNT(DISTINCT e.post_url) as total_posts_with_engagers,
+            COUNT(DISTINCT CASE WHEN e.pushed_to_hubspot THEN e.linkedin_url END) as pushed_to_hubspot_count
+        FROM linkedin_engagers e
+        """
+    )
 
     # Pull remote engagers from HubSpot Organic Social list
     hs_api_key = os.environ["HUBSPOT_API_KEY"]
@@ -69,7 +87,23 @@ def main():
     # Upload new contacts to HubSpot
     logger.info(f"Starting push to Hubspot...")
     utils.hubspot_push_contacts_to_list(hs_api_key, engagers_to_upload, engagers_to_upload_properties)
-    logger.info(f"...Completed push to hubspot\nScript run successfully")
+    logger.info(f"...Completed push to hubspot")
+
+    # Log final state after HubSpot sync
+    utils.log_query_results(
+        cursor,
+        "Post-HubSpot sync statistics",
+        """
+        SELECT 
+            COUNT(DISTINCT e.linkedin_url) as total_engagers,
+            COUNT(DISTINCT CASE WHEN e.pushed_to_hubspot THEN e.linkedin_url END) as pushed_to_hubspot_count,
+            COUNT(DISTINCT e.post_url) as total_posts_with_engagers
+        FROM linkedin_engagers e
+        """
+    )
+
+    cursor.close()
+    conn.close()
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,3 @@
-import sqlite3
 import json
 import requests
 from datetime import datetime
@@ -6,6 +5,8 @@ import os
 from apify_client import ApifyClient
 import pandas as pd
 import logging
+import psycopg2
+from psycopg2.extras import DictCursor
 
 # Configure logging
 logging.basicConfig(
@@ -17,6 +18,55 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+def log_query_results(cursor, query_name, query, params=None):
+    """
+    Helper function to log query results.
+    Args:
+        cursor: Database cursor
+        query_name: Name of the query for logging
+        query: SQL query to execute
+        params: Query parameters (optional)
+    """
+    try:
+        if params:
+            cursor.execute(query, params)
+        else:
+            cursor.execute(query)
+        results = cursor.fetchall()
+        logger.info(f"{query_name} results: {len(results)} rows")
+        if results:
+            logger.debug(f"Sample data: {results[0]}")
+        return results
+    except Exception as e:
+        logger.error(f"Error executing {query_name}: {str(e)}")
+        raise
+
+def get_db_connection():
+    """
+    Creates and returns a connection to the PostgreSQL database.
+    Uses environment variables for connection details.
+    """
+    try:
+        conn = psycopg2.connect(
+            host=os.environ.get("DB_HOST"),
+            port=os.environ.get("DB_PORT", "5432"),
+            database=os.environ.get("DB_NAME"),
+            user=os.environ.get("DB_USER"),
+            password=os.environ.get("DB_PASSWORD"),
+            sslmode="require"
+        )
+        return conn
+    except Exception as e:
+        logger.error(f"Error connecting to database: {str(e)}")
+        raise
+
+def get_db_cursor(conn):
+    """
+    Creates and returns a cursor for the given connection.
+    Uses DictCursor to return results as dictionaries.
+    """
+    return conn.cursor(cursor_factory=DictCursor)
 
 def scrape_post(link):
     """Input: link (str) -- LinkedIn Link. Returns: final_df (df) -- DataFrame containing LinkedIn post engagers."""
@@ -91,9 +141,9 @@ def scrape_post(link):
     logger.info(f"Successfully processed data into DataFrame with {len(final_df)} rows")
     return final_df
 
-def ingest_scrape(conn, cursor, df):
-    """Input: conn (sqlite3.Connection), cursor (sqlite3.Cursor), df (pd.DataFrame) -- DataFrame from scrape_post function.
-    Returns: conn, cursor -- Updated connection and cursor objects."""
+def ingest_scrape(df):
+    """Input: df (pd.DataFrame) -- DataFrame from scrape_post function.
+    Returns: None"""
     
     try:
         logger.info("Starting data ingestion process")
@@ -104,11 +154,14 @@ def ingest_scrape(conn, cursor, df):
         ran_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         logger.info(f"Processing post: {post_url} with {total_reactions} total reactions")
 
+        conn = get_db_connection()
+        cursor = get_db_cursor(conn)
+
         # First, check if post exists and get current scrape count
         cursor.execute("""
             SELECT scrape_count 
-            FROM posts 
-            WHERE post_url = ?
+            FROM linkedin_posts 
+            WHERE post_url = %s
         """, (post_url,))
         result = cursor.fetchone()
         
@@ -116,28 +169,29 @@ def ingest_scrape(conn, cursor, df):
             logger.info(f"Creating new post record for {post_url}")
             # Post doesn't exist, create it first with initial scrape count of 1
             cursor.execute("""
-                INSERT INTO posts (post_url, last_scraped_at, scrape_count, total_reactions)
-                VALUES (?, ?, 1, ?)
+                INSERT INTO linkedin_posts (post_url, last_scraped_at, scrape_count, total_reactions)
+                VALUES (%s, %s, 1, %s)
             """, (post_url, ran_at, total_reactions))
         else:
-            current_count = result[0] or 0  # Handle NULL case
+            current_count = result['scrape_count'] or 0  # Handle NULL case
             logger.info(f"Updating existing post. Current scrape count: {current_count}")
             # Update existing post with incremented scrape count
             cursor.execute("""
-                UPDATE posts
-                SET last_scraped_at = ?,
-                    scrape_count = ?,
-                    total_reactions = ?
-                WHERE post_url = ?
+                UPDATE linkedin_posts
+                SET last_scraped_at = %s,
+                    scrape_count = %s,
+                    total_reactions = %s
+                WHERE post_url = %s
             """, (ran_at, current_count + 1, total_reactions, post_url))
 
         # Ingest scrapes data with current timestamp
         logger.info("Creating new scrape record")
         cursor.execute("""
-            INSERT INTO scrapes (post_url, ran_at, reactions_count, cost, status)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO linkedin_posts_scrapes (post_url, ran_at, reactions_count, cost, status)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
         """, (post_url, ran_at, total_reactions, 0, 'success'))
-        scrape_id = cursor.lastrowid
+        scrape_id = cursor.fetchone()['id']
         logger.info(f"Created scrape record with ID: {scrape_id}")
 
         # Ingest engagers data (multiple rows: all engagers)
@@ -150,8 +204,9 @@ def ingest_scrape(conn, cursor, df):
             name = row.reactor_name
             headline = row.reactor_headline
             cursor.execute("""
-                INSERT OR IGNORE INTO engagers (scrape_id, linkedin_url, name, headline, engagement_type, post_url)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO linkedin_engagers (scrape_id, linkedin_url, name, headline, engagement_type, post_url)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (linkedin_url, post_url) DO NOTHING
             """, (scrape_id, linkedin_url, name, headline, engagement_type, post_url))
             engager_count += 1
 
@@ -160,12 +215,17 @@ def ingest_scrape(conn, cursor, df):
         # Commit the transaction
         conn.commit()
         logger.info("Successfully committed all changes to database")
-        return conn, cursor
+        
+        # Close the connection
+        cursor.close()
+        conn.close()
 
     except Exception as e:
         # Rollback in case of error
         logger.error(f"Error during data ingestion: {str(e)}")
-        conn.rollback()
+        if 'conn' in locals():
+            conn.rollback()
+            conn.close()
         raise Exception(f"Error in ingest_scrape: {str(e)}")
 
 def hubspot_fetch_list_contacts(api_key, url, properties):
