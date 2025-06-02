@@ -1,9 +1,6 @@
 name: Daily LinkedIn to HubSpot Sync
 
 on:
-  schedule:
-    # Run once daily at 9 AM UTC on weekdays
-    - cron: '0 9 * * 1-5'
   workflow_dispatch:
     description: 'Manually trigger the LinkedIn to HubSpot sync'
 
