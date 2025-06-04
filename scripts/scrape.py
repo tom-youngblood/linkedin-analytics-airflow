@@ -43,10 +43,10 @@ def main():
         FROM linkedin_posts p
         WHERE p.last_scraped_at IS NULL OR p.scrape_count < 3
         ORDER BY id DESC
-        LIMIT 3
+        LIMIT 5
         """
     )
-    logger.info("Queried three most recent posts with scrape count < 3")
+    logger.info("Queried five most recent posts with scrape count < 3")
 
     # Convert results to dataframe
     df = pd.DataFrame(posts_to_scrape, columns=["link"])
