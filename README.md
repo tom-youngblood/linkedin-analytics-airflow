@@ -82,6 +82,21 @@ CREATE TABLE IF NOT EXISTS linkedin_engagers (
 
 ---
 
+## 🧑‍💻 Scraping Algorithm
+```mermaid
+flowchart TD
+    A["Start Scraping Cycle"] --> B{"Are there posts never scraped?"}
+    B -- "Yes" --> C["Scrape newest never-scraped post(s)"]
+    B -- "No" --> D{"Are there posts with < 5 scrapes AND last_scraped_at < now - 2 days?"}
+    D -- "Yes" --> E["Scrape newest eligible post(s)"]
+    D -- "No" --> F["Wait until cooldown expires or new posts arrive"]
+    C --> G["Update last_scraped_at and scrape_count"]
+    E --> G
+    F --> H["End Cycle"]
+    G --> H
+    H -->|"Next scheduled run"| A
+```
+
 ## ⚡️ How It Works (Workflow)
 1. **Google Sheets Sync**: `gs_sql.py` pulls new posts/names, deduplicates, and updates the DB
 2. **Scrape**: `scrape.py` scrapes LinkedIn post engagement, stores results in DB

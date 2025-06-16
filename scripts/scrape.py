@@ -41,12 +41,19 @@ def main():
         """
         SELECT p.post_url
         FROM linkedin_posts p
-        WHERE p.last_scraped_at IS NULL OR p.scrape_count < 3
-        ORDER BY id DESC
+        WHERE
+          p.scrape_count < 5
+          AND (
+            p.last_scraped_at IS NULL
+            OR p.last_scraped_at < NOW() - INTERVAL '2 days'
+          )
+        ORDER BY
+          CASE WHEN p.last_scraped_at IS NULL THEN 0 ELSE 1 END,  -- never scraped first
+          p.id DESC
         LIMIT 5
         """
     )
-    logger.info("Queried five most recent posts with scrape count < 3")
+    logger.info("Queried five most recent posts with scrape count < 3 and 2-day cooldown")
 
     # Convert results to dataframe
     df = pd.DataFrame(posts_to_scrape, columns=["link"])
