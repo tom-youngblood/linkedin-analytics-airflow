@@ -6,6 +6,7 @@ import pandas as pd
 import gspread
 import json
 import base64
+import ast
 
 # Configure logging
 logging.basicConfig(
@@ -75,8 +76,59 @@ def scrape_posts_by_profile():
 
     logger.info(f"Total items collected: {len(all_items)}")
     df = pd.DataFrame(all_items)
-    df.to_csv("temp.csv")
 
+    logger.info("Cleaning columns...")
+    # Clean columns: Author
+    df["author"] = df["author"].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
+    df["author"] = df["author"].apply(lambda x: f"{x['first_name']} {x['last_name']}")
 
-# Test scrape posts by profile
-scrape_posts_by_profile()
+    # Clean columns: Comments
+    df["comments"] = df["stats"].apply(
+        lambda x: ast.literal_eval(x)["comments"] if isinstance(x, str) else x.get("comments")
+    )
+
+    # Clean columns: Reposts
+    df["reposts"] = df["stats"].apply(
+        lambda x: ast.literal_eval(x)["reposts"] if isinstance(x, str) else x.get("comments")
+    )
+
+    # Clean columns: Reshared Posts
+    df["reshared_post"] = df["reshared_post"].apply(
+        lambda x: ast.literal_eval(x) if isinstance(x, str) and x != "nan" else x
+    )
+    df["reshared_post_url"] = df["reshared_post"].apply(
+        lambda x: x.get("url") if isinstance(x, dict) else None
+    )
+    df["reshared_post_total_reactions"] = df["reshared_post"].apply(
+        lambda x: x.get("stats", {}).get("total_reactions") if isinstance(x, dict) else None
+    )
+
+    # Clean columns: Media
+    df["media"] = df["media"].apply(
+        lambda x: ast.literal_eval(x) if isinstance(x, str) and x != "nan" else x
+    )
+    df["media_type"] = df["media"].apply(
+        lambda x: x.get("type") if isinstance(x, dict) else None
+    )
+    df["media_url"] = df["media"].apply(
+        lambda x: x.get("url") if isinstance(x, dict) else None
+    )
+
+    # Clean columns: Article
+    df["article"] = df["article"].apply(
+        lambda x: ast.literal_eval(x) if isinstance(x, str) and x != "nan" else x
+    )
+
+    # Add article_url column
+    df["article_url"] = df["article"].apply(
+        lambda x: x.get("url") if isinstance(x, dict) else None
+    )
+
+    # Add title column
+    df["article_title"] = df["article"].apply(
+        lambda x: x.get("title") if isinstance(x, dict) else None
+    )
+    logger.log("All columns prepared for RDS Database")
+
+if __name__=="__main__":
+    

@@ -1,4 +1,5 @@
 import json
+import ast
 import requests
 from datetime import datetime
 import os
@@ -7,6 +8,7 @@ import pandas as pd
 import logging
 import psycopg2
 from psycopg2.extras import DictCursor
+import gspread
 
 # Configure logging
 logging.basicConfig(
@@ -21,12 +23,14 @@ logger = logging.getLogger(__name__)
 
 def log_query_results(cursor, query_name, query, params=None):
     """
-    Helper function to log query results.
+    Execute a SQL query and log the results.
     Args:
         cursor: Database cursor
         query_name: Name of the query for logging
         query: SQL query to execute
         params: Query parameters (optional)
+    Returns:
+        List of query results
     """
     try:
         if params:
@@ -44,8 +48,9 @@ def log_query_results(cursor, query_name, query, params=None):
 
 def get_db_connection():
     """
-    Creates and returns a connection to the PostgreSQL database.
-    Uses environment variables for connection details.
+    Create and return a connection to the PostgreSQL database using environment variables.
+    Returns:
+        psycopg2 connection object
     """
     try:
         conn = psycopg2.connect(
@@ -63,13 +68,22 @@ def get_db_connection():
 
 def get_db_cursor(conn):
     """
-    Creates and returns a cursor for the given connection.
-    Uses DictCursor to return results as dictionaries.
+    Create and return a DictCursor for the given PostgreSQL connection.
+    Args:
+        conn: psycopg2 connection object
+    Returns:
+        psycopg2 DictCursor object
     """
     return conn.cursor(cursor_factory=DictCursor)
 
 def scrape_post_engagers(link):
-    """Input: link (str) -- LinkedIn Link. Returns: final_df (df) -- DataFrame containing LinkedIn post engagers."""
+    """
+    Scrape LinkedIn post engagers using Apify and return a DataFrame of engagers.
+    Args:
+        link: LinkedIn post URL (str)
+    Returns:
+        DataFrame containing post engagers and their details
+    """
     logger.info(f"Starting scrape for LinkedIn post: {link}")
     
     # Initialize the ApifyClient with your API token
@@ -141,9 +155,126 @@ def scrape_post_engagers(link):
     logger.info(f"Successfully processed data into DataFrame with {len(final_df)} rows")
     return final_df
 
+def scrape_posts_by_profile():
+    """
+    Scrape LinkedIn posts by profile using Apify, clean the resulting DataFrame, and prepare columns for RDS ingestion.
+    Returns:
+        None (saves cleaned DataFrame to variable in scope)
+    """
+    # Load Google Sheet to get the number of posts to scrape
+    encoded_key = str(os.getenv("SERVICE_ACCOUNT_KEY"))[2:-1]
+    gspread_credentials = json.loads(base64.b64decode(encoded_key).decode('utf-8'))
+    gc = gspread.service_account_from_dict(gspread_credentials)
+    links_df = pd.DataFrame(gc.open("Organic Social Dashboard").worksheet('LI Links').get_all_values(), columns=['link', 'post', 'id'])
+    max_posts = len(links_df)
+    logger.info(f"Will scrape up to {max_posts} posts to match Google Sheet.")
+
+    # Initialize the ApifyClient with your API token
+    client = ApifyClient(os.environ.get("APIFY_API_KEY"))
+
+    links_df = links_df[0:5]
+    all_items = []
+    page_number = 1
+
+    while True:
+        # Prepare the Actor input
+        run_input = {
+            "username": os.environ.get("LINKEDIN_PROFILE_URL"),
+            "page_number": page_number,
+            "limit": 100,
+        }
+
+        # Run the Actor and wait for it to finish
+        run = client.actor("LQQIXN9Othf8f7R5n").call(run_input=run_input)
+
+        # Get items from this page
+        page_items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+        logger.info(f"Retrieved {len(page_items)} items from page {page_number}")
+        
+        # If no items returned, we've reached the end
+        if not page_items:
+            logger.info("No more items found, ending pagination")
+            break
+            
+        all_items.extend(page_items)
+
+        # If we've reached or exceeded the max_posts, stop
+        if len(all_items) >= max_posts:
+            logger.info(f"Reached the max number of posts ({max_posts}), ending pagination")
+            all_items = all_items[:max_posts]  # Trim to exact number if over
+            break
+        
+        # If we got less than 100 items, we've reached the end
+        if len(page_items) < 100:
+            logger.info("Received less than 100 items, ending pagination")
+            break
+            
+        page_number += 1
+
+    logger.info(f"Total items collected: {len(all_items)}")
+    df = pd.DataFrame(all_items)
+
+    logger.info("Cleaning columns...")
+    # Clean columns: Author
+    df["author"] = df["author"].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
+    df["author"] = df["author"].apply(lambda x: f"{x['first_name']} {x['last_name']}")
+
+    # Clean columns: Comments
+    df["comments"] = df["stats"].apply(
+        lambda x: ast.literal_eval(x)["comments"] if isinstance(x, str) else x.get("comments")
+    )
+
+    # Clean columns: Reposts
+    df["reposts"] = df["stats"].apply(
+        lambda x: ast.literal_eval(x)["reposts"] if isinstance(x, str) else x.get("comments")
+    )
+
+    # Clean columns: Reshared Posts
+    df["reshared_post"] = df["reshared_post"].apply(
+        lambda x: ast.literal_eval(x) if isinstance(x, str) and x != "nan" else x
+    )
+    df["reshared_post_url"] = df["reshared_post"].apply(
+        lambda x: x.get("url") if isinstance(x, dict) else None
+    )
+    df["reshared_post_total_reactions"] = df["reshared_post"].apply(
+        lambda x: x.get("stats", {}).get("total_reactions") if isinstance(x, dict) else None
+    )
+
+    # Clean columns: Media
+    df["media"] = df["media"].apply(
+        lambda x: ast.literal_eval(x) if isinstance(x, str) and x != "nan" else x
+    )
+    df["media_type"] = df["media"].apply(
+        lambda x: x.get("type") if isinstance(x, dict) else None
+    )
+    df["media_url"] = df["media"].apply(
+        lambda x: x.get("url") if isinstance(x, dict) else None
+    )
+
+    # Clean columns: Article
+    df["article"] = df["article"].apply(
+        lambda x: ast.literal_eval(x) if isinstance(x, str) and x != "nan" else x
+    )
+
+    # Add article_url column
+    df["article_url"] = df["article"].apply(
+        lambda x: x.get("url") if isinstance(x, dict) else None
+    )
+
+    # Add title column
+    df["article_title"] = df["article"].apply(
+        lambda x: x.get("title") if isinstance(x, dict) else None
+    )
+    logger.log("All columns prepared for RDS Database")
+
 def ingest_scrape(df):
-    """Input: df (pd.DataFrame) -- DataFrame from scrape_post function.
-    Returns: None"""
+    """
+    Ingest scraped post and engagers data into the PostgreSQL database.
+    Args:
+        df: DataFrame from scrape_post function
+    Returns:
+        None
+    """
     
     try:
         logger.info("Starting data ingestion process")
@@ -230,13 +361,13 @@ def ingest_scrape(df):
 
 def hubspot_fetch_list_contacts(api_key, url, properties):
     """
-    Inputs: 
-    Hubspot API Key (STR),
-    URL (Str): URL of list 
-    Properties (list): All properties to be returned
-    
-    Returns: 
-    DF: list of contacts.
+    Fetch a list of contacts from a HubSpot list and return as a DataFrame.
+    Args:
+        api_key: HubSpot API key (str)
+        url: HubSpot list URL (str)
+        properties: List of properties to retrieve (list)
+    Returns:
+        DataFrame of contacts
     """
     logger.info(f"Fetching contacts from HubSpot list: {url}")
     # Headers for authentication
@@ -294,7 +425,15 @@ def hubspot_fetch_list_contacts(api_key, url, properties):
     return pd.DataFrame(contacts_list)
 
 def hubspot_push_contacts_to_list(api_key, df, properties_map):
-    """Pushes all contacts from a DataFrame to HubSpot using a mapping of local column names to HubSpot property names."""
+    """
+    Push contacts from a DataFrame to HubSpot using a mapping of local column names to HubSpot property names.
+    Args:
+        api_key: HubSpot API key (str)
+        df: DataFrame of contacts
+        properties_map: Dict mapping local column names to HubSpot property names
+    Returns:
+        None
+    """
     logger.info(f"Starting HubSpot contact push for {len(df)} contacts")
     url = "https://api.hubapi.com/crm/v3/objects/contacts"
     headers = {
