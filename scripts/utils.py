@@ -68,7 +68,7 @@ def get_db_cursor(conn):
     """
     return conn.cursor(cursor_factory=DictCursor)
 
-def scrape_post(link):
+def scrape_post_engagers(link):
     """Input: link (str) -- LinkedIn Link. Returns: final_df (df) -- DataFrame containing LinkedIn post engagers."""
     logger.info(f"Starting scrape for LinkedIn post: {link}")
     
