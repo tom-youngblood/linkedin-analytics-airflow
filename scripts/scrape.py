@@ -79,7 +79,7 @@ def main():
             )
 
             # Scrape posts
-            post_scrape = utils.scrape_post(row["link"])
+            post_scrape = utils.scrape_post_engagers(row["link"])
             logger.info(f"Post Scraped: {row['link']}")
 
             # Create a safe filename using hash of the URL

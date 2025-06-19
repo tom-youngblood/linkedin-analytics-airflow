@@ -21,9 +21,37 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# Scrape scrape_posts_by_profile
 # Later, this will need to be changed to get only the number of posts that have not been categorized yet using RDS (for efficiency)
 def scrape_posts_by_profile():
+    """
+    Scrapes LinkedIn posts from a profile and processes them into a structured DataFrame.
+
+    This function performs the following operations:
+    1. Retrieves post data from a Google Sheet to determine scraping limits
+    2. Uses Apify to scrape LinkedIn posts with pagination
+    3. Processes and cleans the scraped data into a structured format
+
+    The function cleans and transforms several data fields including:
+    - Author information
+    - Comment counts
+    - Repost statistics
+    - Reshared post details
+    - Media information
+    - Article data
+
+    Returns:
+        pandas.DataFrame: A processed DataFrame containing the scraped LinkedIn posts with the following columns:
+            - author: Full name of the post author
+            - comments: Number of comments on the post
+            - reposts: Number of reposts
+            - reshared_post_url: URL of the original post if reshared
+            - reshared_post_total_reactions: Total reactions on the original post if reshared
+            - media_type: Type of media in the post
+            - media_url: URL of the media content
+            - article_url: URL of any linked article
+            - article_title: Title of any linked article
+            And other relevant post metadata
+    """
     # Load Google Sheet to get the number of posts to scrape
     encoded_key = str(os.getenv("SERVICE_ACCOUNT_KEY"))[2:-1]
     gspread_credentials = json.loads(base64.b64decode(encoded_key).decode('utf-8'))
@@ -89,7 +117,7 @@ def scrape_posts_by_profile():
 
     # Clean columns: Reposts
     df["reposts"] = df["stats"].apply(
-        lambda x: ast.literal_eval(x)["reposts"] if isinstance(x, str) else x.get("comments")
+        lambda x: ast.literal_eval(x)["reposts"] if isinstance(x, str) else x.get("reposts")
     )
 
     # Clean columns: Reshared Posts
@@ -130,5 +158,77 @@ def scrape_posts_by_profile():
     )
     logger.log("All columns prepared for RDS Database")
 
+    return df
+
+def scrape_post_media_info(link):
+    """
+    Scrapes detailed media information from a specific LinkedIn post.
+
+    This function retrieves and processes media-related information from a LinkedIn post,
+    including details about videos, images, and other media content. It uses the Apify
+    platform to scrape the data and processes it into a structured format.
+
+    Args:
+        link (str): The URL of the LinkedIn post to scrape.
+
+    Returns:
+        pandas.DataFrame: A DataFrame containing the post's media information with the following columns:
+            - post_url: URL of the post
+            - media_type: Type of media ('video', 'image', etc.)
+            For video content:
+                - duration: Length of the video
+                - mime_type: MIME type of the video
+                - thumbnail: URL of the video thumbnail
+                - video_url: URL of the video content
+            For image content:
+                - image_url: URL of the image
+            Additional metadata about the post and its media content
+
+    Notes:
+        - The function handles both video and image content differently
+        - For non-media posts or when media information is unavailable, relevant fields will be None
+        - The function uses ast.literal_eval to safely convert string representations of dictionaries
+    """
+    # Initialize the ApifyClient with your API token
+    client = ApifyClient(os.environ.get("APIFY_API_KEY"))
+
+    # Prepare the Actor input
+    run_input = {"post_url":  link}
+
+    # Run the Actor and wait for it to finish
+    logger.info("Running actor...")
+    run = client.actor("d0DhjXPjkkwm4W5xK").call(run_input=run_input)
+    items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+    logger.info(f"Run complete: items {items}")
+
+    df = pd.DataFrame(items)
+    logger.info(f"DataFrame:\n{df}")
+    logger.info("Performing transformations on DataFrame...")
+
+    # Convert all columns to literal python dict
+    for property in ["post", "media"]:
+        df[property] = df[property].apply(
+            lambda x: ast.literal_eval(x) if isinstance(x, str) and x != "nan" else x
+        )
+
+    # Unpack post url
+    df["post_url"] = df["post"].apply(lambda x: x.get("url") if isinstance(x, dict) and x != "nan" else x)
+
+    # Extract media type and video-specific properties
+    df["media_type"] = df["media"].apply(lambda x: x[0].get("type") if x != "nan" else x)
+
+    # Extract video-specific properties only when media type is video
+    df["duration"] = df["media"].apply(lambda x: x[0].get("duration") if x != "nan" and x[0].get("type") == "video" else None)
+    df["mime_type"] = df["media"].apply(lambda x: x[0].get("mime_type") if x != "nan" and x[0].get("type") == "video" else None)
+    df["thumbnail"] = df["media"].apply(lambda x: x[0].get("thumbnail") if x != "nan" and x[0].get("type") == "video" else None)
+    df["video_url"] = df["media"].apply(lambda x: x[0].get("video_url") if x != "nan" and x[0].get("type") == "video" else None)
+
+    # Extract image-specific properties only when media type is image
+    df["image_url"] = df["media"].apply(lambda x: x[0].get("url") if x != "nan" and x[0].get("type") == "image" else None)
+
+    return df
+
+
+
 if __name__=="__main__":
-    
+    pass
