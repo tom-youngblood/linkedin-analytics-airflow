@@ -63,7 +63,22 @@ def main():
             post_name TEXT,
             last_scraped_at TIMESTAMP,
             scrape_count INTEGER DEFAULT 0,
-            total_reactions INTEGER DEFAULT 0
+            total_reactions INTEGER DEFAULT 0,
+            text TEXT,
+            post_type TEXT,
+            comments INTEGER,
+            reposts INTEGER,
+            reshared_post_url TEXT,
+            reshared_post_total_reactions INTEGER,
+            media_type TEXT,
+            media_url TEXT,
+            article_url TEXT,
+            article_title TEXT,
+            duration REAL,
+            mime_type TEXT,
+            thumbnail TEXT,
+            video_url TEXT,
+            image_url TEXT
         )
         """)
         logger.debug("Created/verified posts table")

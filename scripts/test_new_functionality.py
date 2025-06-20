@@ -284,8 +284,6 @@ def finalize_enrichment_output(scrape_posts_by_profile_df, prepare_media_enrichm
     merged = merged[["url",
                  "text",
                  "post_type",
-                 "reshared_post",
-                 "article",
                  "comments",
                  "reposts",
                  "reshared_post_url",
