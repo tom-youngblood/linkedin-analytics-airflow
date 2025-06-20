@@ -79,7 +79,8 @@ def main():
             thumbnail TEXT,
             video_url TEXT,
             image_url TEXT,
-            enriched BOOLEAN DEFAULT FALSE
+            enriched BOOLEAN DEFAULT FALSE,
+            enriched_time TIMESTAMP
         )
         """)
         logger.debug("Created/verified posts table")

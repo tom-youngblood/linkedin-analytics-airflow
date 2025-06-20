@@ -8,6 +8,7 @@ import json
 import base64
 import ast
 import utils
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
@@ -275,7 +276,7 @@ def finalize_enrichment_output(scrape_posts_by_profile_df, prepare_media_enrichm
                  "reposts",
                  "reshared_post_url",
                  "reshared_post_total_reactions",
-                 "media_type",
+                 "media_type_x",
                  "media_url",
                  "article_url",
                  "article_title",
@@ -284,26 +285,97 @@ def finalize_enrichment_output(scrape_posts_by_profile_df, prepare_media_enrichm
                  "thumbnail",
                  "video_url",
                  "image_url",
-                 "post"]]
+                 "post"]].rename(columns={"media_type_x":"media_type"})
 
     logger.info("Merge complete")
     return merged
 
+def ingest_enriched_data_to_db(df):
+    """
+    Ingests the enriched data into the database, updating existing post records.
+
+    For each row in the DataFrame, it finds the corresponding post in the
+    'linkedin_posts' table via the URL and updates it with the new, enriched
+    data fields. It also sets the 'enriched' flag to TRUE and records the
+    'enriched_time'.
+
+    Args:
+        df (pd.DataFrame): The DataFrame containing the final merged and enriched data.
+    """
+    logger.info(f"Starting ingestion of {len(df)} enriched posts into the database.")
+    
+    conn = None  # Initialize conn to None
+    try:
+        conn = utils.get_db_connection()
+        cursor = conn.cursor()
+        
+        update_count = 0
+        error_count = 0
+
+        # List of columns to update in the database
+        columns_to_update = [
+            "text", "post_type", "comments", "reposts", "reshared_post_url",
+            "reshared_post_total_reactions", "media_type", "media_url",
+            "article_url", "article_title", "duration", "mime_type",
+            "thumbnail", "video_url", "image_url"
+        ]
+
+        for _, row in df.iterrows():
+            post_url = row.get('url')
+            if pd.isna(post_url):
+                logger.warning("Skipping a row because its URL is missing.")
+                error_count += 1
+                continue
+
+            # Build the SET clause and the values for the SQL query
+            set_parts = []
+            values = []
+            for col in columns_to_update:
+                value = row.get(col)
+                # Ensure pandas NaN is converted to None for SQL NULL
+                if pd.isna(value):
+                    values.append(None)
+                else:
+                    values.append(value)
+                set_parts.append(f"{col} = %s")
+            
+            # Add the 'enriched' flag to the update
+            set_parts.append("enriched = TRUE")
+            # Add 'enriched_time' to the update
+            set_parts.append("enriched_time = %s")
+            values.append(datetime.now())
+            
+            # Add the post_url for the WHERE clause
+            values.append(post_url)
+
+            # Construct the final UPDATE query
+            sql_query = f"UPDATE linkedin_posts SET {', '.join(set_parts)} WHERE post_url = %s"
+
+            try:
+                cursor.execute(sql_query, tuple(values))
+                update_count += 1
+            except Exception as e:
+                logger.error(f"Failed to update post {post_url}: {str(e)}")
+                error_count += 1
+        
+        conn.commit()
+        logger.info(f"Ingestion complete. Successfully updated: {update_count}, Errors: {error_count}")
+
+    except Exception as e:
+        logger.error(f"A critical error occurred during the database operation: {str(e)}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            conn.close()
+            logger.info("Database connection closed.")
+
 if __name__=="__main__":
-    # test: scrape three posts: WORKS!
-    """
-    three_posts = scrape_posts_by_profile()
-    print("first three posts")
-    print(three_posts)
-    three_posts.to_csv("three_posts.csv")
-    """
-
-    # Test the media info enrichment with 5 posts
-    df = pd.read_csv("three_posts.csv")
-    print(df.head()["url"])
-    temp_posts_subset = df.head()
-    df = prepare_media_enrichment_data(temp_posts_subset)
-    df.to_csv("prepare_media_enrichment_data.csv")
-
-
-
+    # Test the ingestion function with the final output file
+    try:
+        final_output_df = pd.read_csv("final_output.csv")
+        print("\nStarting ingestion of enriched data into the database...")
+        ingest_enriched_data_to_db(final_output_df)
+        print("Ingestion process finished.")
+    except FileNotFoundError:
+        print("\n'final_output.csv' not found. Please run the full pipeline first to generate it.")
