@@ -236,7 +236,7 @@ def scrape_post_media_info(url):
 
     return df
 
-def prepare_media_enrichment_data(scrape_posts_by_profiles_df):
+def prepare_media_enrichment_data(scrape_posts_by_profile_df):
     """
     Prepares enrichment data by processing media information for each post.
 
@@ -249,8 +249,8 @@ def prepare_media_enrichment_data(scrape_posts_by_profiles_df):
     # Initialize DataFrame with desired columns
     media_info_df = pd.DataFrame(columns=["post_url", "media_type", "duration", "mime_type", "thumbnail", "video_url", "image_url"])
     logger.info(f"Media info DataFrame created:\n{media_info_df}")
-    logger.info(f"Head of media to process:\n{scrape_posts_by_profiles_df.head()}")
-    logger.info(f"Processing media info for {len(scrape_posts_by_profiles_df)} posts")
+    logger.info(f"Head of media to process:\n{scrape_posts_by_profile_df.head()}")
+    logger.info(f"Processing media info for {len(scrape_posts_by_profile_df)} posts")
     
     try:
         # Extract all URLs into a list
@@ -270,6 +270,39 @@ def prepare_media_enrichment_data(scrape_posts_by_profiles_df):
         
     logger.info("Media info processing complete")
     return media_info_df
+
+def finalize_enrichment_output(scrape_posts_by_profile_df, prepare_media_enrichment_data_df):
+    logger.info("Performing merge...")
+    # Merge both DataFrames
+    merged = pd.merge(left=scrape_posts_by_profile_df, 
+                  right=prepare_media_enrichment_data_df,
+                  left_on="url",
+                  right_on="post_url",
+                  how="outer")
+    
+    # Subset columns
+    merged = merged[["url",
+                 "text",
+                 "post_type",
+                 "reshared_post",
+                 "article",
+                 "comments",
+                 "reposts",
+                 "reshared_post_url",
+                 "reshared_post_total_reactions",
+                 "media_type",
+                 "media_url",
+                 "article_url",
+                 "article_title",
+                 "duration",
+                 "mime_type",
+                 "thumbnail",
+                 "video_url",
+                 "image_url",
+                 "post"]]
+
+    logger.info("Merge complete")
+    return merged
 
 if __name__=="__main__":
     # test: scrape three posts: WORKS!
