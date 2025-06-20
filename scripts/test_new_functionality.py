@@ -7,6 +7,7 @@ import gspread
 import json
 import base64
 import ast
+import utils
 
 # Configure logging
 logging.basicConfig(
@@ -26,44 +27,30 @@ def scrape_posts_by_profile():
     """
     Scrapes LinkedIn posts from a profile and processes them into a structured DataFrame.
 
-    This function performs the following operations:
-    1. Retrieves post data from a Google Sheet to determine scraping limits
-    2. Uses Apify to scrape LinkedIn posts with pagination
-    3. Processes and cleans the scraped data into a structured format
-
-    The function cleans and transforms several data fields including:
-    - Author information
-    - Comment counts
-    - Repost statistics
-    - Reshared post details
-    - Media information
-    - Article data
+    This function determines which posts to scrape by first querying the database
+    for posts that have not been enriched (`enriched = FALSE`). The count of these
+    posts is used as a limit for the profile scraper.
 
     Returns:
-        pandas.DataFrame: A processed DataFrame containing the scraped LinkedIn posts with the following columns:
-            - author: Full name of the post author
-            - comments: Number of comments on the post
-            - reposts: Number of reposts
-            - reshared_post_url: URL of the original post if reshared
-            - reshared_post_total_reactions: Total reactions on the original post if reshared
-            - media_type: Type of media in the post
-            - media_url: URL of the media content
-            - article_url: URL of any linked article
-            - article_title: Title of any linked article
-            And other relevant post metadata
+        pandas.DataFrame: A processed DataFrame containing the scraped LinkedIn posts.
     """
-    # Load Google Sheet to get the number of posts to scrape
-    encoded_key = str(os.getenv("SERVICE_ACCOUNT_KEY"))[2:-1]
-    gspread_credentials = json.loads(base64.b64decode(encoded_key).decode('utf-8'))
-    gc = gspread.service_account_from_dict(gspread_credentials)
-    links_df = pd.DataFrame(gc.open("Organic Social Dashboard").worksheet('LI Links').get_all_values(), columns=['link', 'post', 'id'])
-    max_posts = len(links_df)
-    logger.info(f"Starting scrape for {max_posts} posts")
+    logger.info("Fetching unenriched posts from database to determine scrape limit...")
+    try:
+        conn = utils.get_db_connection()
+        unenriched_posts_df = pd.read_sql_query("SELECT post_url FROM linkedin_posts WHERE enriched = FALSE", conn)
+        conn.close()
+        max_posts = len(unenriched_posts_df)
+        logger.info(f"Found {max_posts} unenriched posts. This will be the scrape limit.")
+        if max_posts == 0:
+            logger.info("No unenriched posts to process. Exiting function.")
+            return pd.DataFrame() # Return empty df
+    except Exception as e:
+        logger.error(f"Failed to fetch posts from database: {str(e)}")
+        return pd.DataFrame() # Return empty df
 
     # Initialize the ApifyClient with your API token
     client = ApifyClient(os.environ.get("APIFY_API_KEY"))
 
-    links_df = links_df[0:2]
     all_items = []
     page_number = 1
 

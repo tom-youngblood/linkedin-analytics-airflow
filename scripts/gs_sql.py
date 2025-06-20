@@ -78,7 +78,8 @@ def main():
             mime_type TEXT,
             thumbnail TEXT,
             video_url TEXT,
-            image_url TEXT
+            image_url TEXT,
+            enriched BOOLEAN DEFAULT FALSE
         )
         """)
         logger.debug("Created/verified posts table")
