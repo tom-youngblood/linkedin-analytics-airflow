@@ -242,7 +242,7 @@ def prepare_media_enrichment_data(scrape_posts_by_profile_df):
     
     try:
         # Extract all URLs into a list
-        urls = scrape_posts_by_profiles_df['url'].tolist()
+        urls = scrape_posts_by_profile_df['url'].tolist()
         logger.info(f"Extracted URLs:\n{urls}")
         
         # Process all URLs in one batch
@@ -257,6 +257,7 @@ def prepare_media_enrichment_data(scrape_posts_by_profile_df):
         logger.error(f"Error during media info processing: {str(e)}")
         
     logger.info("Media info processing complete")
+
     return media_info_df
 
 def finalize_enrichment_output(scrape_posts_by_profile_df, prepare_media_enrichment_data_df):
@@ -311,6 +312,7 @@ def ingest_enriched_data_to_db(df):
         
         update_count = 0
         error_count = 0
+        no_match_count = 0
 
         # List of columns to update in the database
         columns_to_update = [
@@ -326,6 +328,9 @@ def ingest_enriched_data_to_db(df):
                 logger.warning("Skipping a row because its URL is missing.")
                 error_count += 1
                 continue
+
+            # Clean the URL by removing query parameters for matching
+            clean_url = post_url.split('?')[0] if isinstance(post_url, str) else post_url
 
             # Build the SET clause and the values for the SQL query
             set_parts = []
@@ -345,21 +350,30 @@ def ingest_enriched_data_to_db(df):
             set_parts.append("enriched_time = %s")
             values.append(datetime.now())
             
-            # Add the post_url for the WHERE clause
-            values.append(post_url)
+            # Add the clean_url for the WHERE clause
+            values.append(clean_url)
 
-            # Construct the final UPDATE query
-            sql_query = f"UPDATE linkedin_posts SET {', '.join(set_parts)} WHERE post_url = %s"
+            # Construct the final UPDATE query using split_part to clean URLs in the database
+            sql_query = f"""
+                UPDATE linkedin_posts 
+                SET {', '.join(set_parts)} 
+                WHERE split_part(post_url, '?', 1) = %s
+            """
 
             try:
                 cursor.execute(sql_query, tuple(values))
-                update_count += 1
+                if cursor.rowcount == 0:
+                    logger.warning(f"No matching post found for URL: {post_url} (cleaned: {clean_url})")
+                    no_match_count += 1
+                else:
+                    update_count += 1
+                    logger.info(f"Successfully updated post: {post_url} (cleaned: {clean_url})")
             except Exception as e:
                 logger.error(f"Failed to update post {post_url}: {str(e)}")
                 error_count += 1
         
         conn.commit()
-        logger.info(f"Ingestion complete. Successfully updated: {update_count}, Errors: {error_count}")
+        logger.info(f"Ingestion complete. Successfully updated: {update_count}, Errors: {error_count}, No matches: {no_match_count}")
 
     except Exception as e:
         logger.error(f"A critical error occurred during the database operation: {str(e)}")
