@@ -1,5 +1,0 @@
-- post_type: indicates whether repost or not
-- author: indicates author
-- comments: number of comments
-- reshared_post_url: url of the reshared post (our post, posted by someone else)
-- reshared_post_total_reactions: total number of reactions of the reshared post (our post, posted by someone else)

@@ -95,7 +95,9 @@ def scrape_posts_by_profile():
 
     logger.info(f"Processing {len(all_items)} posts")
     df = pd.DataFrame(all_items)
-
+    if df.empty:
+        logger.info("No posts scraped. Returning empty DataFrame.")
+        return df
     try:
         # Clean columns: Author
         df["author"] = df["author"].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
@@ -150,6 +152,9 @@ def scrape_posts_by_profile():
         logger.info("Data processing complete")
     except Exception as e:
         logger.error(f"Error during data processing: {str(e)}")
+
+    # Save csv to function_outputs
+    df.to_csv("../data/function_outputs/scrape_posts_by_profile.csv", index=False)
 
     return df
 
@@ -210,17 +215,18 @@ def scrape_post_media_info(url):
     # Unpack post url
     df["post_url"] = df["post"].apply(lambda x: x.get("url") if isinstance(x, dict) and x != "nan" else x)
 
-    # Extract media type and video-specific properties
-    df["media_type"] = df["media"].apply(lambda x: x[0].get("type") if x != "nan" else x)
-
-    # Extract video-specific properties only when media type is video
-    df["duration"] = df["media"].apply(lambda x: x[0].get("duration") if x != "nan" and x[0].get("type") == "video" else None)
-    df["mime_type"] = df["media"].apply(lambda x: x[0].get("mime_type") if x != "nan" and x[0].get("type") == "video" else None)
-    df["thumbnail"] = df["media"].apply(lambda x: x[0].get("thumbnail") if x != "nan" and x[0].get("type") == "video" else None)
-    df["video_url"] = df["media"].apply(lambda x: x[0].get("video_url") if x != "nan" and x[0].get("type") == "video" else None)
-
-    # Extract image-specific properties only when media type is image
-    df["image_url"] = df["media"].apply(lambda x: x[0].get("url") if x != "nan" and x[0].get("type") == "image" else None)
+    # Robust media extraction
+    def get_media_field(x, field, media_type=None):
+        if isinstance(x, list) and x and isinstance(x[0], dict):
+            if media_type is None or x[0].get("type") == media_type:
+                return x[0].get(field)
+        return None
+    df["media_type"] = df["media"].apply(lambda x: get_media_field(x, "type"))
+    df["duration"] = df["media"].apply(lambda x: get_media_field(x, "duration", "video"))
+    df["mime_type"] = df["media"].apply(lambda x: get_media_field(x, "mime_type", "video"))
+    df["thumbnail"] = df["media"].apply(lambda x: get_media_field(x, "thumbnail", "video"))
+    df["video_url"] = df["media"].apply(lambda x: get_media_field(x, "video_url", "video"))
+    df["image_url"] = df["media"].apply(lambda x: get_media_field(x, "url", "image"))
 
     return df
 
@@ -234,6 +240,9 @@ def prepare_media_enrichment_data(scrape_posts_by_profile_df):
     Returns:
         pd.DataFrame: DataFrame containing enriched media information for all posts
     """
+    if scrape_posts_by_profile_df.empty:
+        logger.info("No posts to enrich media for. Returning empty DataFrame.")
+        return pd.DataFrame(columns=["post_url", "media_type", "duration", "mime_type", "thumbnail", "video_url", "image_url"])
     # Initialize DataFrame with desired columns
     media_info_df = pd.DataFrame(columns=["post_url", "media_type", "duration", "mime_type", "thumbnail", "video_url", "image_url"])
     logger.info(f"Media info DataFrame created:\n{media_info_df}")
@@ -258,37 +267,30 @@ def prepare_media_enrichment_data(scrape_posts_by_profile_df):
         
     logger.info("Media info processing complete")
 
+    # Save csv to function_outputs
+    media_info_df.to_csv("../data/function_outputs/prepare_media_enrichment_data.csv", index=False)
+
     return media_info_df
 
 def finalize_enrichment_output(scrape_posts_by_profile_df, prepare_media_enrichment_data_df):
+    """
+    Merge the two DataFrames and select the final columns for database ingestion.
+    """
     logger.info("Performing merge...")
-    # Merge both DataFrames
-    merged = pd.merge(left=scrape_posts_by_profile_df, 
-                  right=prepare_media_enrichment_data_df,
-                  left_on="url",
-                  right_on="post_url",
-                  how="outer")
-    
-    # Subset columns
-    merged = merged[["url",
-                 "text",
-                 "post_type",
-                 "comments",
-                 "reposts",
-                 "reshared_post_url",
-                 "reshared_post_total_reactions",
-                 "media_type_x",
-                 "media_url",
-                 "article_url",
-                 "article_title",
-                 "duration",
-                 "mime_type",
-                 "thumbnail",
-                 "video_url",
-                 "image_url",
-                 "post"]].rename(columns={"media_type_x":"media_type"})
+   
+    # Clean the URLs in scrape_posts_by_profile_df
+    scrape_posts_by_profile_df['url_clean'] = scrape_posts_by_profile_df['url'].str.split('?').str[0]
 
-    logger.info("Merge complete")
+    # Now merge on the cleaned URL
+    merged = scrape_posts_by_profile_df.merge(
+        prepare_media_enrichment_data_df,
+        left_on='url_clean',
+        right_on='post_url',
+        how='left'
+    )
+
+    logger.info(f"Merge complete:\n{merged}")
+    merged.to_csv("../data/function_outputs/finalized_enrichment_output.csv")
     return merged
 
 def ingest_enriched_data_to_db(df):
@@ -385,11 +387,37 @@ def ingest_enriched_data_to_db(df):
             logger.info("Database connection closed.")
 
 if __name__=="__main__":
-    # Test the ingestion function with the final output file
-    try:
-        final_output_df = pd.read_csv("final_output.csv")
-        print("\nStarting ingestion of enriched data into the database...")
-        ingest_enriched_data_to_db(final_output_df)
-        print("Ingestion process finished.")
-    except FileNotFoundError:
-        print("\n'final_output.csv' not found. Please run the full pipeline first to generate it.")
+    # Scrape posts by profile
+    """
+    logger.info("Running scrape_posts_by_profile...")
+    scrape_posts_by_profile_df = scrape_posts_by_profile()
+    if scrape_posts_by_profile_df.empty:
+        logger.info("No posts to process. Exiting pipeline.")
+        exit(0)
+    logger.info("scrape_posts_by_profile run complete")
+    """
+    scrape_posts_by_profile_df = pd.read_csv("../data/function_outputs/scrape_posts_by_profile.csv")
+
+    # Scrape post media and additional metrics
+    """
+    logger.info("Running prepare_media_enrichment_data...")
+    prepare_media_enrichment_data_df = prepare_media_enrichment_data(scrape_posts_by_profile_df)
+    if prepare_media_enrichment_data_df.empty:
+        logger.info("No media enrichment data. Exiting pipeline.")
+        exit(0)
+    logger.info("prepare_media_enrichment_data run complete")
+    """
+    prepare_media_enrichment_data_df = pd.read_csv("../data/function_outputs/prepare_media_enrichment_data.csv")
+
+    # Produce final output
+    logger.info("Running finalize_enrichment_output_df...")
+    finalize_enrichment_output_df = finalize_enrichment_output(scrape_posts_by_profile_df, prepare_media_enrichment_data_df)
+    if finalize_enrichment_output_df.empty:
+        logger.info("No final output to ingest. Exiting pipeline.")
+        exit(0)
+    logger.info("finalize_enrichment_output_df run complete")
+
+    # Ingest final output to PostgreSQL
+    logger.info("Running ingest_enriched_data_to_db...")
+    ingest_enriched_data_to_db(finalize_enrichment_output_df)
+    logger.info("ingest_enriched_data_to_db complete")
