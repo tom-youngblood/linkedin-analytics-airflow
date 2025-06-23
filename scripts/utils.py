@@ -494,7 +494,7 @@ def scrape_posts_by_profile():
     logger.info("Fetching unenriched posts from database to determine scrape limit...")
     try:
         conn = get_db_connection()
-        unenriched_posts_df = pd.read_sql_query("SELECT post_url FROM linkedin_posts", conn) # After initial run, change this to "SELECT post_url FROM linkedin_posts WHERE enriched = FALSE"
+        unenriched_posts_df = pd.read_sql_query("SELECT post_url FROM linkedin_posts WHERE enriched = FALSE", conn)
         conn.close()
         max_posts = len(unenriched_posts_df)
         logger.info(f"Found {max_posts} unenriched posts. This will be the scrape limit.")
