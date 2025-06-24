@@ -21,10 +21,16 @@ A robust, fully-automated pipeline that:
 graph TD;
     A[Google Sheets] -->|Sync| B(Sync Script: gs_sql.py)
     B -->|Update| C[PostgreSQL DB]
-    C -->|Select| D(Scrape Script: scrape.py)
-    D -->|Scrape & Store| C
-    C -->|Find New Leads| E(HubSpot Sync: sql_hs.py)
-    E -->|Push| F[HubSpot]
+    C -->|Select Unenriched Posts| D(Enrichment Script: enrich_posts.py)
+    D -->|Scrape Media Details| E[Apify Media Scraper]
+    E -->|Enriched Data| D
+    D -->|Update Database| C
+    C -->|Select Posts to Scrape| F(Scrape Script: scrape.py)
+    F -->|Scrape Engagement| G[Apify Engagement Scraper]
+    G -->|Engagement Data| F
+    F -->|Store Results| C
+    C -->|Find New Leads| H(HubSpot Sync: sql_hs.py)
+    H -->|Push| I[HubSpot]
 ```
 
 - **Google Sheets**: Source of truth for LinkedIn post URLs/names
@@ -99,9 +105,10 @@ flowchart TD
 
 ## ⚡️ How It Works (Workflow)
 1. **Google Sheets Sync**: `gs_sql.py` pulls new posts/names, deduplicates, and updates the DB
-2. **Scrape**: `scrape.py` scrapes LinkedIn post engagement, stores results in DB
-3. **HubSpot Sync**: `sql_hs.py` finds new leads and pushes them to HubSpot
-4. **Logging**: Each script writes detailed logs to `scripts/logs/`
+2. **Data Enrichment**: `enrich_posts.py` scrapes additional media details (video duration, thumbnails, etc.) for posts that haven't been enriched yet
+3. **Scrape**: `scrape.py` scrapes LinkedIn post engagement, stores results in DB
+4. **HubSpot Sync**: `sql_hs.py` finds new leads and pushes them to HubSpot
+5. **Logging**: Each script writes detailed logs to `scripts/logs/`
 
 ---
 
@@ -139,6 +146,7 @@ flowchart TD
 
 ## 🧩 Scripts Overview
 - **gs_sql.py**: Syncs Google Sheets → PostgreSQL
+- **enrich_posts.py**: Enriches posts with media details (video duration, thumbnails, etc.) → PostgreSQL
 - **scrape.py**: Scrapes LinkedIn post engagement → PostgreSQL
 - **sql_hs.py**: Pushes new leads from PostgreSQL → HubSpot
 - **utils.py**: Shared helpers for scraping, ingestion, and HubSpot API
