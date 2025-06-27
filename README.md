@@ -1,68 +1,97 @@
-# Organic Social Pipeline v2 
+# LinkedIn Lead Generation Pipeline (Airflow)
 
-**Automate, Integrate, and Scale LinkedIn Lead Generation**
+## Overview
+This project orchestrates a LinkedIn lead generation pipeline using [Apache Airflow](https://airflow.apache.org/) and the [Astronomer CLI](https://docs.astronomer.io/astro/cli/overview). It automates the process of syncing LinkedIn post data from Google Sheets, scraping post and engager data, enriching the data, and pushing new leads to HubSpot. The pipeline is containerized with Docker for local development and production readiness, and integrates seamlessly with PostgreSQL databases.
 
----
+## Features
+- **End-to-end orchestration** of a multi-step LinkedIn lead generation workflow
+- **Modular Python scripts** for each pipeline stage
+- **Airflow DAG** for robust scheduling, monitoring, and retry logic
+- **Secrets and configuration** managed via Airflow Variables and Connections
+- **Logging** to both file and console for all pipeline steps
+- **Production-ready**: easily deployable to any Airflow environment
 
-## ✨ What is This?
-A robust, fully-automated pipeline that:
-- **Syncs LinkedIn post data from Google Sheets** (for accessibilty of non-technical users)
-- **Scrapes post engagement data** using Apify, not your own LinkedIn account and cookies--no risk!
-- **Stores and deduplicates everything in PostgreSQL**
-- **Pushes unique leads to HubSpot**
-- **Runs itself daily via GitHub Actions**-—no manual intervention required!
-- **Uses AWS RDS for reliable, stateful automation**
-
----
-
-## 🏗️ Architecture & Flow
-
-```mermaid
-graph TD;
-    A[Google Sheets] -->|Sync| B(Sync Script: gs_sql.py)
-    B -->|Update| C[PostgreSQL DB]
-    C -->|Select Unenriched Posts| D(Enrichment Script: enrich_posts.py)
-    D -->|Scrape Media Details| E[Apify Media Scraper]
-    E -->|Enriched Data| D
-    D -->|Update Database| C
-    C -->|Select Posts to Scrape| F(Scrape Script: scrape.py)
-    F -->|Scrape Engagement| G[Apify Engagement Scraper]
-    G -->|Engagement Data| F
-    F -->|Store Results| C
-    C -->|Find New Leads| H(HubSpot Sync: sql_hs.py)
-    H -->|Push| I[HubSpot]
+## Project Structure
+```
+├── dags/
+│   └── pipeline_dag.py         # Main Airflow DAG
+├── include/
+│   ├── gs_sql.py               # Google Sheets → PostgreSQL sync
+│   ├── enrich_posts.py         # Post enrichment
+│   ├── scrape.py               # LinkedIn scraping
+│   ├── sql_hs.py               # HubSpot sync
+│   ├── airflow_utils.py        # Env/Variable utility
+│   ├── utils.py                # Shared helpers
+│   └── logs/                   # Log output
+├── requirements.txt            # Python dependencies
+├── Dockerfile                  # Astro Runtime base image
+├── airflow_settings.yaml       # Airflow Connections, Variables, Pools
+├── .astro/config.yaml          # Astro project config
+├── packages.txt                # OS-level packages (if needed)
+└── tests/                      # (Optional) Test DAGs/scripts
 ```
 
-- **Google Sheets**: Source of truth for LinkedIn post URLs/names
-- **Python Scripts**: Modular, reliable, and easy to extend
-- **PostgreSQL**: Robust, scalable database hosted on AWS RDS
-- **HubSpot**: Receives only new, unique leads
-- **GitHub Actions**: Schedules and runs the pipeline
+## Pipeline Workflow
+1. **Google Sheets Sync**: Pulls LinkedIn post data from Google Sheets into PostgreSQL
+2. **Post Enrichment**: Enriches posts with media details and additional metrics
+3. **LinkedIn Scraping**: Scrapes engagement data from LinkedIn posts using Apify
+4. **HubSpot Sync**: Pushes new leads from PostgreSQL to HubSpot
 
----
+Each step is a Python script, orchestrated as a sequential Airflow DAG (`pipeline_dag.py`).
 
-## 🛠️ Key Features
-- **No Duplicates**: Deduplication at every step
-- **Automatic Scheduling**: Runs daily, M–F, at a random time (UTC 9–17)
-- **Stateful**: Database hosted on AWS RDS—no data loss
-- **Robust Logging**: All scripts log to timestamped files for easy debugging
-- **Non-Technical Friendly**: Creative team updates a Google Sheet, pipeline does the rest
-- **Easy to Extend**: Modular scripts for each stage
+```mermaid
+graph TD
+    A[Google Sheets: LinkedIn Posts] --> B[Google Sheets Sync: gs_sql.py]
+    B --> C[PostgreSQL: linkedin_posts]
+    
+    C --> D[Post Enrichment: >enrich_posts.py]
+    D --> E[PostgreSQL: enriched_posts]
+    
+    C --> F[LinkedIn Scraping: scrape.py]
+    F --> G[Apify API: Engagement Data]
+    G --> H[PostgreSQL: linkedin_engagers]
+    
+    H -- OPTIONAL CRM INTEGRATION --> I[HubSpot Sync: sql_hs.py]
+    I --> J[HubSpot: Organic Social List]
+```
 
----
+## Database Schema
+The pipeline uses three main PostgreSQL tables to store LinkedIn post data, scraping history, and engager information.
 
-## 📝 SQL Schema
+### `linkedin_posts`
+Stores LinkedIn post metadata and enrichment data.
 ```sql
-CREATE TABLE IF NOT EXISTS linkedin_posts (
+CREATE TABLE linkedin_posts (
     id SERIAL PRIMARY KEY,
     post_url TEXT UNIQUE,
     post_name TEXT,
     last_scraped_at TIMESTAMP,
     scrape_count INTEGER DEFAULT 0,
-    total_reactions INTEGER DEFAULT 0
+    total_reactions INTEGER DEFAULT 0,
+    text TEXT,
+    post_type TEXT,
+    comments INTEGER,
+    reposts INTEGER,
+    reshared_post_url TEXT,
+    reshared_post_total_reactions INTEGER,
+    media_type TEXT,
+    media_url TEXT,
+    article_url TEXT,
+    article_title TEXT,
+    duration REAL,
+    mime_type TEXT,
+    thumbnail TEXT,
+    video_url TEXT,
+    image_url TEXT,
+    enriched BOOLEAN DEFAULT FALSE,
+    enriched_time TIMESTAMP
 );
+```
 
-CREATE TABLE IF NOT EXISTS linkedin_posts_scrapes (
+### `linkedin_posts_scrapes`
+Tracks scraping history and costs for each post.
+```sql
+CREATE TABLE linkedin_posts_scrapes (
     id SERIAL PRIMARY KEY,
     post_url TEXT,
     ran_at TIMESTAMP,
@@ -71,8 +100,12 @@ CREATE TABLE IF NOT EXISTS linkedin_posts_scrapes (
     status TEXT,
     FOREIGN KEY (post_url) REFERENCES linkedin_posts(post_url)
 );
+```
 
-CREATE TABLE IF NOT EXISTS linkedin_engagers (
+### `linkedin_engagers`
+Stores individual engager profiles and their engagement with posts.
+```sql
+CREATE TABLE linkedin_engagers (
     id SERIAL PRIMARY KEY,
     scrape_id INTEGER,
     linkedin_url TEXT,
@@ -86,90 +119,234 @@ CREATE TABLE IF NOT EXISTS linkedin_engagers (
 );
 ```
 
----
+## Setup & Installation
+### Prerequisites
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (must be running)
+- [Astronomer CLI](https://docs.astronomer.io/astro/cli/install-astro)
+- Python 3.10+
 
-## 🧑‍💻 Scraping Algorithm
-```mermaid
-flowchart TD
-    A["Start Scraping Cycle"] --> B{"Are there posts never scraped?"}
-    B -- "Yes" --> C["Scrape newest never-scraped post(s)"]
-    B -- "No" --> D{"Are there posts with < 5 scrapes AND last_scraped_at < now - 2 days?"}
-    D -- "Yes" --> E["Scrape newest eligible post(s)"]
-    D -- "No" --> F["Wait until cooldown expires or new posts arrive"]
-    C --> G["Update last_scraped_at and scrape_count"]
-    E --> G
-    F --> H["End Cycle"]
-    G --> H
-    H -->|"Next scheduled run"| A
+### Local Development
+1. **Clone the repository**
+2. **Install Astro CLI** (if not already):
+   ```sh
+   curl -sSL https://install.astronomer.io | sudo bash -s -- v1.19.0
+   ```
+3. **Start Airflow locally**:
+   ```sh
+   astro dev start
+   ```
+4. **Access Airflow UI**: [http://localhost:8080](http://localhost:8080) (default: admin/admin)
+
+### Python Dependencies
+All dependencies are listed in `requirements.txt`. Astro automatically installs these in the container.
+
+### OS-level Packages
+If needed, add to `packages.txt` (currently empty).
+
+## Configuration
+### Secrets & Environment Variables
+- **Airflow Variables**: Set via Airflow UI or `airflow_settings.yaml` for local dev
+- **Airflow Connections**: Set via Airflow UI or `airflow_settings.yaml`
+- **.env file**: Optional for local script testing (not used in production Airflow)
+
+#### Example `.env`
+```
+DB_HOST=your-db-host
+DB_PORT=5432
+DB_NAME=your-db-name
+DB_USER=your-db-user
+DB_PASSWORD=your-db-password
+SERVICE_ACCOUNT_KEY=base64-encoded-google-service-account-json
+APIFY_API_KEY=your-apify-key
+HUBSPOT_API_KEY=your-hubspot-key
+LINKEDIN_SHEET_NAME=Organic Social Dashboard
+LINKEDIN_WORKSHEET_NAME=LI Links
+HUBSPOT_LIST_ID=246
+LINKEDIN_PROFILE_URL=https://www.linkedin.com/in/your-profile
 ```
 
-## ⚡️ How It Works (Workflow)
-1. **Google Sheets Sync**: `gs_sql.py` pulls new posts/names, deduplicates, and updates the DB
-2. **Data Enrichment**: `enrich_posts.py` scrapes additional media details (video duration, thumbnails, etc.) for posts that haven't been enriched yet
-3. **Scrape**: `scrape.py` scrapes LinkedIn post engagement, stores results in DB
-4. **HubSpot Sync**: `sql_hs.py` finds new leads and pushes them to HubSpot
-5. **Logging**: Each script writes detailed logs to `scripts/logs/`
+#### Example `airflow_settings.yaml`
+```yaml
+# This file allows you to configure Airflow Connections, Pools, and Variables in a single place for local development only.
+# NOTE: json dicts can be added to the conn_extra field as yaml key value pairs.
+
+airflow:
+  connections:
+    # PostgreSQL Database Connection
+    - conn_id: postgres_default
+      conn_type: postgres
+      conn_host: your-db-host
+      conn_schema: your-db-name
+      conn_login: your-db-user
+      conn_password: your-db-password
+      conn_port: 5432
+      conn_extra:
+        sslmode: require
+    
+    # Google Sheets Connection (for service account)
+    - conn_id: google_sheets_default
+      conn_type: google_cloud_platform
+      conn_extra:
+        project: your-gcp-project-id
+        key_path: /path/to/service-account-key.json
+    
+    # HubSpot Connection
+    - conn_id: hubspot_default
+      conn_type: http
+      conn_host: https://api.hubapi.com
+      conn_extra:
+        api_key: your-hubspot-api-key
+    
+    # Apify Connection
+    - conn_id: apify_default
+      conn_type: http
+      conn_host: https://api.apify.com
+      conn_extra:
+        api_key: your-apify-api-key
+
+  pools:
+    # Optional: Create a pool for limiting concurrent scraping tasks
+    - pool_name: linkedin_scraping
+      pool_slot: 3
+      pool_description: Pool for LinkedIn scraping tasks to limit concurrent API calls
+
+  variables:
+    # Database Configuration
+    - variable_name: DB_HOST
+      variable_value: your-db-host
+    - variable_name: DB_PORT
+      variable_value: "5432"
+    - variable_name: DB_NAME
+      variable_value: your-db-name
+    - variable_name: DB_USER
+      variable_value: your-db-user
+    - variable_name: DB_PASSWORD
+      variable_value: your-db-password
+    
+    # Google Sheets Configuration
+    - variable_name: SERVICE_ACCOUNT_KEY
+      variable_value: "base64-encoded-google-service-account-json"
+    
+    # Apify Configuration
+    - variable_name: APIFY_API_KEY
+      variable_value: your-apify-api-key
+    
+    # HubSpot Configuration
+    - variable_name: HUBSPOT_API_KEY
+      variable_value: your-hubspot-api-key
+    
+    # Pipeline Configuration
+    - variable_name: LINKEDIN_SHEET_NAME
+      variable_value: "Organic Social Dashboard"
+    - variable_name: LINKEDIN_WORKSHEET_NAME
+      variable_value: "LI Links"
+    - variable_name: HUBSPOT_LIST_ID
+      variable_value: "246"
+    
+    # Additional Configuration
+    - variable_name: LINKEDIN_PROFILE_URL
+      variable_value: "https://www.linkedin.com/in/your-profile"
+```
+
+> **Tip:** Use the Airflow UI (Admin → Variables/Connections) for production secrets. The `airflow_utils.py` utility ensures scripts work in both Airflow and local environments.
+
+### airflow_settings.yaml
+This file pre-loads all required Airflow Variables and Connections for local development. **Do not commit real secrets to version control.**
+
+## Usage
+- **Trigger the DAG**: In the Airflow UI, enable and trigger `linkedin_lead_pipeline`
+- **Schedule**: By default, runs daily at 9 AM (with a random delay to avoid detection)
+- **Logs**: View logs in Airflow UI or in `include/logs/`
+
+## Logging
+All scripts log to both the console and rotating log files in `include/logs/`. Airflow also captures all logs per task instance.
+
+## Testing
+- **Unit tests**: (Add to `tests/` as needed)
+- **Manual runs**: Trigger the DAG in Airflow UI and verify logs/output
+
+## Deployment
+- **Local**: Use `astro dev start` for local development
+- **Production**: Deploy to any Airflow environment (Astro, MWAA, self-hosted, etc.)
+- **CI/CD**: Recommended to use GitHub Actions for linting, testing, and deployment (see below for more info)
+
+## CI/CD with GitHub Actions
+This project includes comprehensive GitHub Actions workflows for continuous integration and deployment.
+
+### Workflows Included
+
+#### 1. Main CI/CD Pipeline (`ci-cd.yml`)
+- **Triggers**: Push to `main`/`develop`, pull requests, manual dispatch
+- **Jobs**:
+  - **Lint & Test**: Code formatting (Black), linting (Flake8), unit tests with coverage
+  - **Security Scan**: Bandit (code security) and Safety (dependency vulnerabilities)
+  - **DAG Validation**: Uses Astro CLI to validate DAG syntax
+  - **Deploy Staging**: Auto-deploys to staging on `develop` branch
+  - **Deploy Production**: Auto-deploys to production on `main` branch
+
+#### 2. Security Scanning (`security.yml`)
+- **Triggers**: Weekly schedule, dependency changes, manual dispatch
+- **Features**: Automated vulnerability scanning with PR comments
+
+#### 3. Backup & Export (`backup.yml`)
+- **Triggers**: Daily schedule, manual dispatch
+- **Features**: Creates timestamped backups of DAGs and configurations
+
+### Required GitHub Secrets
+Set these in your repository's Settings → Secrets and variables → Actions:
+
+```bash
+# Astro Cloud Deployment
+ASTRO_API_TOKEN=your-astro-api-token
+ASTRO_WORKSPACE_ID=your-workspace-id
+ASTRO_DEPLOYMENT_ID_STAGING=your-staging-deployment-id
+ASTRO_DEPLOYMENT_ID_PROD=your-production-deployment-id
+
+# Optional: Cloud Storage for Backups
+AWS_ACCESS_KEY_ID=your-aws-access-key
+AWS_SECRET_ACCESS_KEY=your-aws-secret-key
+```
+
+### Getting Astro Deployment IDs
+```bash
+# List your workspaces
+astro workspace list
+
+# List deployments in a workspace
+astro deployment list --workspace-id <workspace-id>
+```
+
+### Manual Deployment
+You can trigger deployments manually from the Actions tab:
+1. Go to Actions → "Airflow Pipeline CI/CD"
+2. Click "Run workflow"
+3. Select environment (staging/production)
+4. Click "Run workflow"
+
+### Branch Strategy
+- **`develop`**: Auto-deploys to staging environment
+- **`main`**: Auto-deploys to production environment
+- **Feature branches**: Run tests and validation only
+
+## Security & Best Practices
+- **Never commit real secrets** to version control
+- Use Airflow Variables/Connections for all credentials
+- Whitelist Airflow's IP for database/API access in production
+- Use remote logging for production Airflow if possible
+- Regularly update dependencies and review DAG/task logs
+
+## Troubleshooting
+- **Docker not running**: Ensure Docker Desktop is started before `astro dev start`
+- **DAG not visible**: Check for syntax errors in `pipeline_dag.py` and restart Astro
+- **Secrets not found**: Ensure Airflow Variables/Connections are set in the UI or `airflow_settings.yaml`
+- **Logs missing**: Check permissions on `include/logs/` and Airflow log settings
+
+## Contributing
+- Fork the repo and create a feature branch
+- Add/modify scripts in `include/` and update the DAG as needed
+- Test locally with Astro
+- Open a pull request with a clear description
 
 ---
 
-## 🚀 Quickstart
-1. **Clone the repo**
-2. **Install dependencies**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
-3. **Set up your environment variables**
-   ```
-   DB_HOST=your_rds_host
-   DB_PORT=5432
-   DB_NAME=your_db_name
-   DB_USER=your_db_user
-   DB_PASSWORD=your_db_password
-   SERVICE_ACCOUNT_KEY=your_google_sheets_key
-   APIFY_API_KEY=your_apify_key
-   HUBSPOT_API_KEY=your_hubspot_key
-   ```
-4. **Run locally (for testing)**
-   ```bash
-   cd scripts
-   python gs_sql.py
-   python scrape.py
-   python sql_hs.py
-   ```
-5. **Automate with GitHub Actions**
-   - Add your secrets in the repo settings
-   - The workflow will run automatically
-
----
-
-## 🧩 Scripts Overview
-- **gs_sql.py**: Syncs Google Sheets → PostgreSQL
-- **enrich_posts.py**: Enriches posts with media details (video duration, thumbnails, etc.) → PostgreSQL
-- **scrape.py**: Scrapes LinkedIn post engagement → PostgreSQL
-- **sql_hs.py**: Pushes new leads from PostgreSQL → HubSpot
-- **utils.py**: Shared helpers for scraping, ingestion, and HubSpot API
-
----
-
-## 🛡️ Reliability & Extensibility
-- **Risk free LinkedIn Scraping**: Uses external accounts, cookies, and IPs
-- **Database hosted on AWS RDS**: Reliable and scalable
-- **Logs for every run**: Debug and audit with ease
-- **Easy to add new sources or destinations**: Just add a script and update the workflow
-
----
-
-## 👩‍💻 For Non-Technical Users
-- Just update the Google Sheet—no code, no problem!
-- All syncing, scraping, and pushing is fully automated
-
----
-
-## 📈 Why Use This Pipeline?
-- **Save time**: No more manual copy-paste or lead uploads
-- **Reduce errors**: Automation means fewer mistakes
-- **Scale easily**: Add more posts, more scrapes, or more destinations
-- **Audit everything**: Logs and database history are always available
----
+For questions or onboarding help, contact the project maintainer or open an issue.

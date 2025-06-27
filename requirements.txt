@@ -1,3 +1,6 @@
+# Astro Runtime includes the following pre-installed providers packages: https://www.astronomer.io/docs/astro/runtime-image-architecture#provider-packages
+
+# LinkedIn Pipeline Dependencies
 anyio==4.9.0
 apify_client==1.10.0
 apify_shared==1.4.1
@@ -31,7 +34,7 @@ tabulate==0.9.0
 typing_extensions==4.13.2
 tzdata==2025.2
 urllib3==2.4.0
-psycopg2-binary
-apache-airflow==2.8.1
+
+# Additional Airflow providers for the pipeline
 apache-airflow-providers-postgres
 apache-airflow-providers-http
