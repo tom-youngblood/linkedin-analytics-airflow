@@ -159,124 +159,7 @@ def scrape_post_engagers(link):
     logger.info(f"Successfully processed data into DataFrame with {len(final_df)} rows")
     return final_df
 
-def scrape_posts_by_profile():
-    """
-    Scrape LinkedIn posts by profile using Apify, clean the resulting DataFrame, and prepare columns for RDS ingestion.
-    Returns:
-        None (saves cleaned DataFrame to variable in scope)
-    """
-    # Load Google Sheet to get the number of posts to scrape
-    encoded_key = airflow_utils.get_required_env_var("SERVICE_ACCOUNT_KEY")
-    # Remove quotes if present (common when stored as string)
-    if encoded_key.startswith('"') and encoded_key.endswith('"'):
-        encoded_key = encoded_key[1:-1]
-    gspread_credentials = json.loads(base64.b64decode(encoded_key).decode('utf-8'))
-    gc = gspread.service_account_from_dict(gspread_credentials)
-    
-    sheet_name = airflow_utils.get_optional_env_var("LINKEDIN_SHEET_NAME", "Organic Social Dashboard")
-    worksheet_name = airflow_utils.get_optional_env_var("LINKEDIN_WORKSHEET_NAME", "LI Links")
-    
-    links_df = pd.DataFrame(gc.open(sheet_name).worksheet(worksheet_name).get_all_values(), columns=['link', 'post', 'id'])
-    max_posts = len(links_df)
-    logger.info(f"Will scrape up to {max_posts} posts to match Google Sheet.")
 
-    # Initialize the ApifyClient with your API token
-    client = ApifyClient(airflow_utils.get_required_env_var("APIFY_API_KEY"))
-
-    links_df = links_df[0:5]
-    all_items = []
-    page_number = 1
-
-    while True:
-        # Prepare the Actor input
-        run_input = {
-            "username": airflow_utils.get_required_env_var("LINKEDIN_PROFILE_URL"),
-            "page_number": page_number,
-            "limit": 100,
-        }
-
-        # Run the Actor and wait for it to finish
-        run = client.actor("LQQIXN9Othf8f7R5n").call(run_input=run_input)
-
-        # Get items from this page
-        page_items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
-        logger.info(f"Retrieved {len(page_items)} items from page {page_number}")
-        
-        # If no items returned, we've reached the end
-        if not page_items:
-            logger.info("No more items found, ending pagination")
-            break
-            
-        all_items.extend(page_items)
-
-        # If we've reached or exceeded the max_posts, stop
-        if len(all_items) >= max_posts:
-            logger.info(f"Reached the max number of posts ({max_posts}), ending pagination")
-            all_items = all_items[:max_posts]  # Trim to exact number if over
-            break
-        
-        # If we got less than 100 items, we've reached the end
-        if len(page_items) < 100:
-            logger.info("Received less than 100 items, ending pagination")
-            break
-            
-        page_number += 1
-
-    logger.info(f"Total items collected: {len(all_items)}")
-    df = pd.DataFrame(all_items)
-
-    logger.info("Cleaning columns...")
-    # Clean columns: Author
-    df["author"] = df["author"].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
-    df["author"] = df["author"].apply(lambda x: f"{x['first_name']} {x['last_name']}")
-
-    # Clean columns: Comments
-    df["comments"] = df["stats"].apply(
-        lambda x: ast.literal_eval(x)["comments"] if isinstance(x, str) else x.get("comments")
-    )
-
-    # Clean columns: Reposts
-    df["reposts"] = df["stats"].apply(
-        lambda x: ast.literal_eval(x)["reposts"] if isinstance(x, str) else x.get("comments")
-    )
-
-    # Clean columns: Reshared Posts
-    df["reshared_post"] = df["reshared_post"].apply(
-        lambda x: ast.literal_eval(x) if isinstance(x, str) and x != "nan" else x
-    )
-    df["reshared_post_url"] = df["reshared_post"].apply(
-        lambda x: x.get("url") if isinstance(x, dict) else None
-    )
-    df["reshared_post_total_reactions"] = df["reshared_post"].apply(
-        lambda x: x.get("stats", {}).get("total_reactions") if isinstance(x, dict) else None
-    )
-
-    # Clean columns: Media
-    df["media"] = df["media"].apply(
-        lambda x: ast.literal_eval(x) if isinstance(x, str) and x != "nan" else x
-    )
-    df["media_type"] = df["media"].apply(
-        lambda x: x.get("type") if isinstance(x, dict) else None
-    )
-    df["media_url"] = df["media"].apply(
-        lambda x: x.get("url") if isinstance(x, dict) else None
-    )
-
-    # Clean columns: Article
-    df["article"] = df["article"].apply(
-        lambda x: ast.literal_eval(x) if isinstance(x, str) and x != "nan" else x
-    )
-
-    # Add article_url column
-    df["article_url"] = df["article"].apply(
-        lambda x: x.get("url") if isinstance(x, dict) else None
-    )
-
-    # Add title column
-    df["article_title"] = df["article"].apply(
-        lambda x: x.get("title") if isinstance(x, dict) else None
-    )
-    logger.log("All columns prepared for RDS Database")
 
 def ingest_scrape(df):
     """
@@ -488,136 +371,39 @@ def hubspot_push_contacts_to_list(api_key, df, properties_map):
     logger.info(f"HubSpot push completed. Successes: {success_count}, Errors: {error_count}")
     return None
 
-def scrape_posts_by_profile():
+def get_unenriched_posts_from_db():
     """
-    Scrapes LinkedIn posts from a profile and processes them into a structured DataFrame.
-
-    This function determines which posts to scrape by first querying the database
-    for posts that have not been enriched (`enriched = FALSE`). The count of these
-    posts is used as a limit for the profile scraper.
-
+    Fetches unenriched posts from the database for individual processing.
+    
+    This function queries the database for posts that have not been enriched
+    (`enriched = FALSE`) and returns them as a DataFrame with basic post information.
+    This replaces the risky profile scraping approach with a safer individual post approach.
+    
     Returns:
-        pandas.DataFrame: A processed DataFrame containing the scraped LinkedIn posts.
+        pandas.DataFrame: A DataFrame containing unenriched posts with columns:
+            - post_url: URL of the post
+            - post_name: Name/description of the post
+            - id: Database ID of the post
     """
-    logger.info("Fetching unenriched posts from database to determine scrape limit...")
+    logger.info("Fetching unenriched posts from database for individual processing...")
     try:
         conn = get_db_connection()
-        unenriched_posts_df = pd.read_sql_query("SELECT post_url FROM linkedin_posts WHERE enriched = FALSE", conn)
+        unenriched_posts_df = pd.read_sql_query(
+            "SELECT post_url, post_name, id FROM linkedin_posts WHERE enriched = FALSE", 
+            conn
+        )
         conn.close()
-        max_posts = len(unenriched_posts_df)
-        logger.info(f"Found {max_posts} unenriched posts. This will be the scrape limit.")
-        if max_posts == 0:
-            logger.info("No unenriched posts to process. Exiting function.")
-            return pd.DataFrame() # Return empty df
+        
+        if unenriched_posts_df.empty:
+            logger.info("No unenriched posts found in database.")
+            return pd.DataFrame()
+            
+        logger.info(f"Found {len(unenriched_posts_df)} unenriched posts for processing.")
+        return unenriched_posts_df
+        
     except Exception as e:
-        logger.error(f"Failed to fetch posts from database: {str(e)}")
-        return pd.DataFrame() # Return empty df
-
-    # Initialize the ApifyClient with your API token
-    client = ApifyClient(airflow_utils.get_required_env_var("APIFY_API_KEY"))
-
-    all_items = []
-    page_number = 1
-
-    while True:
-        # Prepare the Actor input
-        run_input = {
-            "username": airflow_utils.get_required_env_var("LINKEDIN_PROFILE_URL"),
-            "page_number": page_number,
-            "limit": 100,
-        }
-
-        try:
-            # Run the Actor and wait for it to finish
-            run = client.actor("LQQIXN9Othf8f7R5n").call(run_input=run_input)
-            
-            # Get items from this page
-            page_items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
-            
-            # If no items returned, we've reached the end
-            if not page_items:
-                logger.info("Scraping complete - no more items found")
-                break
-                
-            all_items.extend(page_items)
-
-            # If we've reached or exceeded the max_posts, stop
-            if len(all_items) >= max_posts:
-                logger.info(f"Scraping complete - reached target of {max_posts} posts")
-                all_items = all_items[:max_posts]  # Trim to exact number if over
-                break
-            
-            # If we got less than 100 items, we've reached the end
-            if len(page_items) < 100:
-                logger.info("Scraping complete - last page processed")
-                break
-                
-            page_number += 1
-        except Exception as e:
-            logger.error(f"Error during scraping: {str(e)}")
-            break
-
-    logger.info(f"Processing {len(all_items)} posts")
-    df = pd.DataFrame(all_items)
-    if df.empty:
-        logger.info("No posts scraped. Returning empty DataFrame.")
-        return df
-    try:
-        # Clean columns: Author
-        df["author"] = df["author"].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
-        df["author"] = df["author"].apply(lambda x: f"{x['first_name']} {x['last_name']}")
-
-        # Clean columns: Comments
-        df["comments"] = df["stats"].apply(
-            lambda x: ast.literal_eval(x)["comments"] if isinstance(x, str) else x.get("comments")
-        )
-
-        # Clean columns: Reposts
-        df["reposts"] = df["stats"].apply(
-            lambda x: ast.literal_eval(x)["reposts"] if isinstance(x, str) else x.get("reposts")
-        )
-
-        # Clean columns: Reshared Posts
-        df["reshared_post"] = df["reshared_post"].apply(
-            lambda x: ast.literal_eval(x) if isinstance(x, str) and x != "nan" else x
-        )
-        df["reshared_post_url"] = df["reshared_post"].apply(
-            lambda x: x.get("url") if isinstance(x, dict) else None
-        )
-        df["reshared_post_total_reactions"] = df["reshared_post"].apply(
-            lambda x: x.get("stats", {}).get("total_reactions") if isinstance(x, dict) else None
-        )
-
-        # Clean columns: Media
-        df["media"] = df["media"].apply(
-            lambda x: ast.literal_eval(x) if isinstance(x, str) and x != "nan" else x
-        )
-        df["media_type"] = df["media"].apply(
-            lambda x: x.get("type") if isinstance(x, dict) else None
-        )
-        df["media_url"] = df["media"].apply(
-            lambda x: x.get("url") if isinstance(x, dict) else None
-        )
-
-        # Clean columns: Article
-        df["article"] = df["article"].apply(
-            lambda x: ast.literal_eval(x) if isinstance(x, str) and x != "nan" else x
-        )
-
-        # Add article_url column
-        df["article_url"] = df["article"].apply(
-            lambda x: x.get("url") if isinstance(x, dict) else None
-        )
-
-        # Add title column
-        df["article_title"] = df["article"].apply(
-            lambda x: x.get("title") if isinstance(x, dict) else None
-        )
-        logger.info("Data processing complete")
-    except Exception as e:
-        logger.error(f"Error during data processing: {str(e)}")
-
-    return df
+        logger.error(f"Failed to fetch unenriched posts from database: {str(e)}")
+        return pd.DataFrame()
 
 def scrape_post_media_info(url):
     """
@@ -628,10 +414,10 @@ def scrape_post_media_info(url):
     platform to scrape the data and processes it into a structured format.
 
     Args:
-        links (str or list): Single URL or list of URLs of LinkedIn posts to scrape.
+        url (str): URL of the LinkedIn post to scrape.
 
     Returns:
-        pandas.DataFrame: A DataFrame containing the posts' media information with the following columns:
+        pandas.DataFrame: A DataFrame containing the post's media information with the following columns:
             - post_url: URL of the post
             - media_type: Type of media ('video', 'image', etc.)
             For video content:
@@ -691,72 +477,80 @@ def scrape_post_media_info(url):
 
     return df
 
-def prepare_media_enrichment_data(scrape_posts_by_profile_df):
+def prepare_media_enrichment_data(unenriched_posts_df):
     """
     Prepares enrichment data by processing media information for each post.
 
     Args:
-        scrape_posts_by_profile_urls (pd.DataFrame): DataFrame containing post data with 'url' column
+        unenriched_posts_df (pd.DataFrame): DataFrame containing post data with 'post_url' column
 
     Returns:
         pd.DataFrame: DataFrame containing enriched media information for all posts
     """
-    if scrape_posts_by_profile_df.empty:
+    if unenriched_posts_df.empty:
         logger.info("No posts to enrich media for. Returning empty DataFrame.")
         return pd.DataFrame(columns=["post_url", "media_type", "duration", "mime_type", "thumbnail", "video_url", "image_url"])
+    
     # Initialize DataFrame with desired columns
     media_info_df = pd.DataFrame(columns=["post_url", "media_type", "duration", "mime_type", "thumbnail", "video_url", "image_url"])
-    logger.info(f"Media info DataFrame created:\n{media_info_df}")
-    logger.info(f"Head of media to process:\n{scrape_posts_by_profile_df.head()}")
-    logger.info(f"Processing media info for {len(scrape_posts_by_profile_df)} posts")
+    logger.info(f"Media info DataFrame created with columns: {media_info_df.columns.tolist()}")
+    logger.info(f"Processing media info for {len(unenriched_posts_df)} posts")
     
     try:
         # Extract all URLs into a list
-        urls = scrape_posts_by_profile_df['url'].tolist()
-        logger.info(f"Extracted URLs:\n{urls}")
+        urls = unenriched_posts_df['post_url'].tolist()
+        logger.info(f"Extracted {len(urls)} URLs for processing")
         
         # Process all URLs in one batch
         for url in urls:
             logger.info(f"Processing post: {url}...")
             single_enriched_post = scrape_post_media_info(url)
-            logger.info(f"Processed post: {url}. Returned DF:\n{single_enriched_post}\nAppending to media_info_df.\nmedia_info_df:\n:{media_info_df}")
-            media_info_df = pd.concat([media_info_df, single_enriched_post], ignore_index=True)
-            logger.info(f"media_info_df after concat:\n{media_info_df}")    
+            if not single_enriched_post.empty:
+                media_info_df = pd.concat([media_info_df, single_enriched_post], ignore_index=True)
+                logger.info(f"Successfully processed post: {url}")
+            else:
+                logger.warning(f"No media data returned for post: {url}")
         
     except Exception as e:
         logger.error(f"Error during media info processing: {str(e)}")
         
-    logger.info("Media info processing complete")
-
+    logger.info(f"Media info processing complete. Processed {len(media_info_df)} posts with media data.")
     return media_info_df
 
-def finalize_enrichment_output(scrape_posts_by_profile_df, prepare_media_enrichment_data_df):
+def finalize_enrichment_output(unenriched_posts_df, media_enrichment_df):
     """
-    Merge the two DataFrames and select the final columns for database ingestion.
+    Merge the unenriched posts DataFrame with media enrichment data.
+    
+    Args:
+        unenriched_posts_df (pd.DataFrame): DataFrame containing unenriched posts from database
+        media_enrichment_df (pd.DataFrame): DataFrame containing media enrichment data
+    
+    Returns:
+        pd.DataFrame: Merged DataFrame with all enrichment data
     """
-    logger.info("Performing merge...")
+    logger.info("Performing merge of unenriched posts with media enrichment data...")
    
-    # Clean the URLs in scrape_posts_by_profile_df
-    scrape_posts_by_profile_df['url_clean'] = scrape_posts_by_profile_df['url'].str.split('?').str[0]
+    # Clean the URLs in unenriched_posts_df for matching
+    unenriched_posts_df['url_clean'] = unenriched_posts_df['post_url'].str.split('?').str[0]
 
     # Now merge on the cleaned URL
-    merged = scrape_posts_by_profile_df.merge(
-        prepare_media_enrichment_data_df,
+    merged = unenriched_posts_df.merge(
+        media_enrichment_df,
         left_on='url_clean',
         right_on='post_url',
         how='left'
     )
 
-    logger.info(f"Merge complete:\n{merged}")
+    logger.info(f"Merge complete. Final DataFrame has {len(merged)} rows.")
     return merged
 
 def ingest_enriched_data_to_db(df):
     """
-    Ingests the enriched data into the database, updating existing post records.
+    Ingests the enriched media data into the database, updating existing post records.
 
     For each row in the DataFrame, it finds the corresponding post in the
     'linkedin_posts' table via the URL and updates it with the new, enriched
-    data fields. It also sets the 'enriched' flag to TRUE and records the
+    media data fields. It also sets the 'enriched' flag to TRUE and records the
     'enriched_time'.
 
     Args:
@@ -773,18 +567,15 @@ def ingest_enriched_data_to_db(df):
         error_count = 0
         no_match_count = 0
 
-        # List of columns to update in the database
+        # List of columns to update in the database (only media-related fields)
         columns_to_update = [
-            "text", "post_type", "comments", "reposts", "reshared_post_url",
-            "reshared_post_total_reactions", "media_type", "media_url",
-            "article_url", "article_title", "duration", "mime_type",
-            "thumbnail", "video_url", "image_url"
+            "media_type", "duration", "mime_type", "thumbnail", "video_url", "image_url"
         ]
 
         for _, row in df.iterrows():
-            post_url = row.get('url')
+            post_url = row.get('post_url')  # Use post_url from the merged DataFrame
             if pd.isna(post_url):
-                logger.warning("Skipping a row because its URL is missing.")
+                logger.warning("Skipping a row because its post_url is missing.")
                 error_count += 1
                 continue
 
