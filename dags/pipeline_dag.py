@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 @dag(
     start_date=datetime(2025, 6, 26),
-    schedule="0 16 * * *",  # Daily at 4 PM UTC
+    # schedule="0 16 * * *",  # Removed schedule to disable automatic runs
     catchup=False,
     doc_md=__doc__,
     default_args={

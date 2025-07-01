@@ -74,6 +74,11 @@ def main():
     
     # Filter out engagers that are already in HubSpot
     engagers_to_upload = local_engagers[~local_engagers['linkedin_url'].isin(existing_urls)]
+
+    # Deduplicate by linkedin_url and any other url-related columns
+    url_columns = [col for col in engagers_to_upload.columns if 'url' in col]
+    engagers_to_upload = engagers_to_upload.drop_duplicates(subset=url_columns)
+    logger.info(f"Deduplicated engagers to upload by columns: {url_columns}. Unique contacts: {len(engagers_to_upload)}")
     logger.info(f"Subset of engagers to upload:\n{engagers_to_upload}")
     
     # Map local property names to hubspot property names
