@@ -130,6 +130,16 @@ def main():
         )
         """)
         logger.debug("Created/verified engagers table")
+
+        # Create companies table
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS linkedin_companies (
+            id SERIAL PRIMARY KEY,
+            company_name TEXT,
+            company_url TEXT UNIQUE
+        )
+        """)
+        logger.debug("Created/verified linkedin_companies table")
     except Exception as e:
         logger.error(f"Failed to create database tables: {str(e)}")
         raise

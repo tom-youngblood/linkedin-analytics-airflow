@@ -81,6 +81,10 @@ def main():
     logger.info(f"Deduplicated engagers to upload by columns: {url_columns}. Unique contacts: {len(engagers_to_upload)}")
     logger.info(f"Subset of engagers to upload:\n{engagers_to_upload}")
     
+    # Only push /in/ profiles to HubSpot
+    engagers_to_upload = engagers_to_upload[engagers_to_upload['linkedin_url'].str.contains('/in/')]
+    logger.info(f"Filtered engagers to upload for HubSpot push (only /in/ profiles):\n{engagers_to_upload}")
+
     # Map local property names to hubspot property names
     engagers_to_upload_properties = {
         'linkedin_url': 'hs_linkedin_url',
@@ -94,6 +98,54 @@ def main():
     logger.info(f"Starting push to Hubspot...")
     utils.hubspot_push_contacts_to_list(hs_api_key, engagers_to_upload, engagers_to_upload_properties)
     logger.info(f"...Completed push to hubspot")
+
+    # --- New: Update company and jobtitle for existing contacts ---
+    # Fetch all HubSpot contacts with hs_linkedin_url, company, jobtitle
+    hubspot_contacts = utils.hubspot_fetch_all_contacts(
+        hs_api_key, ["hs_linkedin_url", "company", "jobtitle"]
+    )
+    logger.info(f"Fetched {len(hubspot_contacts)} HubSpot contacts for update check.")
+
+    # Fetch all local engagers with linkedin_url, company, title
+    cursor.execute("""
+        SELECT linkedin_url, company, title FROM linkedin_engagers
+        WHERE linkedin_url IS NOT NULL AND linkedin_url != ''
+    """)
+    local_engagers = pd.DataFrame(cursor.fetchall(), columns=["linkedin_url", "company", "title"])
+    logger.info(f"Fetched {len(local_engagers)} local engagers for update check.")
+
+    # Merge on linkedin_url/hs_linkedin_url
+    merged = pd.merge(
+        hubspot_contacts,
+        local_engagers,
+        left_on="hs_linkedin_url",
+        right_on="linkedin_url",
+        how="inner",
+        suffixes=("_hubspot", "_local")
+    )
+    logger.info(f"Found {len(merged)} matching contacts between HubSpot and local DB.")
+
+    # For each match, update if company or jobtitle differs
+    update_count = 0
+    for _, row in merged.iterrows():
+        contact_id = row["id"]
+        local_company = row["company_local"]
+        local_title = row["title"]
+        hs_company = row.get("company_hubspot")
+        hs_jobtitle = row.get("jobtitle")
+        # Only update if different and local value is not null/empty
+        needs_update = False
+        update_fields = {}
+        if pd.notnull(local_company) and local_company and local_company != hs_company:
+            update_fields["company"] = local_company
+            needs_update = True
+        if pd.notnull(local_title) and local_title and local_title != hs_jobtitle:
+            update_fields["jobtitle"] = local_title
+            needs_update = True
+        if needs_update:
+            utils.hubspot_update_contact(hs_api_key, contact_id, update_fields.get("company"), update_fields.get("jobtitle"))
+            update_count += 1
+    logger.info(f"Updated {update_count} HubSpot contacts with new company/jobtitle info.")
 
     # Log final state after HubSpot sync
     utils.log_query_results(

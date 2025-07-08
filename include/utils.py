@@ -220,20 +220,27 @@ def ingest_scrape(df):
         # Ingest engagers data (multiple rows: all engagers)
         logger.info("Processing engagers data")
         engager_count = 0
-        # Using DataFrame's itertuples for better performance
+        company_count = 0
         for row in df.itertuples():
             linkedin_url = row.reactor_profile_url
             engagement_type = row.reaction_type
             name = row.reactor_name
             headline = row.reactor_headline
-            cursor.execute("""
-                INSERT INTO linkedin_engagers (scrape_id, linkedin_url, name, headline, engagement_type, post_url)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (linkedin_url, post_url) DO NOTHING
-            """, (scrape_id, linkedin_url, name, headline, engagement_type, post_url))
-            engager_count += 1
-
-        logger.info(f"Processed {engager_count} engagers")
+            if linkedin_url and "/in/" in linkedin_url:
+                cursor.execute("""
+                    INSERT INTO linkedin_engagers (scrape_id, linkedin_url, name, headline, engagement_type, post_url)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (linkedin_url, post_url) DO NOTHING
+                """, (scrape_id, linkedin_url, name, headline, engagement_type, post_url))
+                engager_count += 1
+            elif linkedin_url and "/company/" in linkedin_url:
+                cursor.execute("""
+                    INSERT INTO linkedin_companies (company_name, company_url)
+                    VALUES (%s, %s)
+                    ON CONFLICT (company_url) DO NOTHING
+                """, (name, linkedin_url))
+                company_count += 1
+        logger.info(f"Processed {engager_count} engagers and {company_count} companies")
 
         # Commit the transaction
         conn.commit()
@@ -368,6 +375,78 @@ def hubspot_push_contacts_to_list(api_key, df, properties_map):
 
     logger.info(f"HubSpot push completed. Successes: {success_count}, Errors: {error_count}")
     return None
+
+def hubspot_fetch_all_contacts(api_key, properties):
+    """
+    Fetch all contacts from HubSpot with the specified properties.
+    Args:
+        api_key: HubSpot API key (str)
+        properties: List of properties to retrieve (list)
+    Returns:
+        DataFrame of contacts
+    """
+    logger.info(f"Fetching all contacts from HubSpot with properties: {properties}")
+    url = "https://api.hubapi.com/crm/v3/objects/contacts"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    params = {
+        "limit": 100,
+        "properties": ",".join(properties)
+    }
+    all_contacts = []
+    after = None
+    while True:
+        if after:
+            params["after"] = after
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code != 200:
+            logger.error(f"Error fetching contacts: {response.status_code}, {response.text}")
+            break
+        data = response.json()
+        results = data.get("results", [])
+        all_contacts.extend(results)
+        after = data.get("paging", {}).get("next", {}).get("after")
+        if not after:
+            break
+    logger.info(f"Fetched {len(all_contacts)} contacts from HubSpot")
+    # Flatten to DataFrame
+    contacts_list = []
+    for contact in all_contacts:
+        props = contact.get("properties", {})
+        props["id"] = contact.get("id")
+        contacts_list.append(props)
+    return pd.DataFrame(contacts_list)
+
+def hubspot_update_contact(api_key, contact_id, company, jobtitle):
+    """
+    Update a HubSpot contact's company and jobtitle by contact id.
+    Args:
+        api_key: HubSpot API key (str)
+        contact_id: HubSpot contact id (str)
+        company: New company value (str)
+        jobtitle: New jobtitle value (str)
+    Returns:
+        True if updated, False otherwise
+    """
+    url = f"https://api.hubapi.com/crm/v3/objects/contacts/{contact_id}"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    data = {"properties": {}}
+    if company is not None:
+        data["properties"]["company"] = company
+    if jobtitle is not None:
+        data["properties"]["jobtitle"] = jobtitle
+    response = requests.patch(url, headers=headers, json=data)
+    if response.status_code == 200:
+        logger.info(f"Updated HubSpot contact {contact_id} with company='{company}', jobtitle='{jobtitle}'")
+        return True
+    else:
+        logger.error(f"Failed to update HubSpot contact {contact_id}: {response.status_code}, {response.text}")
+        return False
 
 def get_unenriched_posts_from_db():
     """
