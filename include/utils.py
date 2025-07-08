@@ -377,14 +377,6 @@ def hubspot_push_contacts_to_list(api_key, df, properties_map):
     return None
 
 def hubspot_fetch_all_contacts(api_key, properties):
-    """
-    Fetch all contacts from HubSpot with the specified properties.
-    Args:
-        api_key: HubSpot API key (str)
-        properties: List of properties to retrieve (list)
-    Returns:
-        DataFrame of contacts
-    """
     logger.info(f"Fetching all contacts from HubSpot with properties: {properties}")
     url = "https://api.hubapi.com/crm/v3/objects/contacts"
     headers = {
@@ -397,6 +389,7 @@ def hubspot_fetch_all_contacts(api_key, properties):
     }
     all_contacts = []
     after = None
+    batch_num = 1
     while True:
         if after:
             params["after"] = after
@@ -407,10 +400,12 @@ def hubspot_fetch_all_contacts(api_key, properties):
         data = response.json()
         results = data.get("results", [])
         all_contacts.extend(results)
+        logger.info(f"Batch {batch_num}: Retrieved {len(results)} contacts, running total: {len(all_contacts)}")
         after = data.get("paging", {}).get("next", {}).get("after")
         if not after:
+            logger.info(f"Completed fetching all contacts. Total: {len(all_contacts)}")
             break
-    logger.info(f"Fetched {len(all_contacts)} contacts from HubSpot")
+        batch_num += 1
     # Flatten to DataFrame
     contacts_list = []
     for contact in all_contacts:

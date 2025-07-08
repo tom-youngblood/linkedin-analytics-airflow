@@ -99,12 +99,14 @@ def main():
     utils.hubspot_push_contacts_to_list(hs_api_key, engagers_to_upload, engagers_to_upload_properties)
     logger.info(f"...Completed push to hubspot")
 
-    # --- New: Update company and jobtitle for existing contacts ---
-    # Fetch all HubSpot contacts with hs_linkedin_url, company, jobtitle
-    hubspot_contacts = utils.hubspot_fetch_all_contacts(
-        hs_api_key, ["hs_linkedin_url", "company", "jobtitle"]
-    )
-    logger.info(f"Fetched {len(hubspot_contacts)} HubSpot contacts for update check.")
+    # --- New: Update company and jobtitle for existing contacts in Organic Social list only ---
+    # Fetch all contacts in the Organic Social list (ID 246) with needed properties
+    hs_api_key = airflow_utils.get_required_env_var("HUBSPOT_API_KEY")
+    list_id = airflow_utils.get_optional_env_var("HUBSPOT_LIST_ID", "246")
+    url = f"https://api.hubapi.com/contacts/v1/lists/{list_id}/contacts/all?property=hs_linkedin_url&property=company&property=jobtitle"
+    properties = ["hs_linkedin_url", "company", "jobtitle"]
+    hubspot_contacts = utils.hubspot_fetch_list_contacts(hs_api_key, url, properties)
+    logger.info(f"Fetched {len(hubspot_contacts)} HubSpot contacts from list {list_id} for update check.")
 
     # Fetch all local engagers with linkedin_url, company, title
     cursor.execute("""
@@ -113,6 +115,10 @@ def main():
     """)
     local_engagers = pd.DataFrame(cursor.fetchall(), columns=["linkedin_url", "company", "title"])
     logger.info(f"Fetched {len(local_engagers)} local engagers for update check.")
+
+    # Clean up URLs for matching
+    hubspot_contacts['hs_linkedin_url'] = hubspot_contacts['hs_linkedin_url'].str.strip().str.lower()
+    local_engagers['linkedin_url'] = local_engagers['linkedin_url'].str.strip().str.lower()
 
     # Merge on linkedin_url/hs_linkedin_url
     merged = pd.merge(
@@ -123,12 +129,12 @@ def main():
         how="inner",
         suffixes=("_hubspot", "_local")
     )
-    logger.info(f"Found {len(merged)} matching contacts between HubSpot and local DB.")
+    logger.info(f"Found {len(merged)} matching contacts between HubSpot list and local DB.")
 
     # For each match, update if company or jobtitle differs
     update_count = 0
     for _, row in merged.iterrows():
-        contact_id = row["id"]
+        contact_id = row.get("vid") or row.get("id")
         local_company = row["company_local"]
         local_title = row["title"]
         hs_company = row.get("company_hubspot")
@@ -142,10 +148,10 @@ def main():
         if pd.notnull(local_title) and local_title and local_title != hs_jobtitle:
             update_fields["jobtitle"] = local_title
             needs_update = True
-        if needs_update:
+        if needs_update and contact_id:
             utils.hubspot_update_contact(hs_api_key, contact_id, update_fields.get("company"), update_fields.get("jobtitle"))
             update_count += 1
-    logger.info(f"Updated {update_count} HubSpot contacts with new company/jobtitle info.")
+    logger.info(f"Updated {update_count} HubSpot contacts in list {list_id} with new company/jobtitle info.")
 
     # Log final state after HubSpot sync
     utils.log_query_results(

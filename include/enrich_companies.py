@@ -81,36 +81,36 @@ def migrate_companies_from_engagers(cursor, conn):
 
 def get_unenriched_engagers(cursor):
     query = """
-        SELECT id, linkedin_url FROM linkedin_engagers
-        WHERE company IS NULL OR company = '' OR title IS NULL OR title = ''
+        SELECT DISTINCT linkedin_url
+        FROM linkedin_engagers
+        WHERE (company IS NULL OR company = '' OR title IS NULL OR title = '')
         AND linkedin_url IS NOT NULL AND linkedin_url != ''
     """
     cursor.execute(query)
     rows = cursor.fetchall()
-    return pd.DataFrame(rows, columns=["id", "linkedin_url"])
+    return pd.DataFrame(rows, columns=["linkedin_url"])
 
 def enrich_and_update_engagers(df, cursor, conn):
     for _, row in df.iterrows():
         linkedin_url = row["linkedin_url"]
-        engager_id = row["id"]
         try:
-            logger.info(f"Enriching {linkedin_url} (id={engager_id})...")
+            logger.info(f"Enriching {linkedin_url} ...")
             result = scrape_company(linkedin_url)
             company = result.get("company")
             title = result.get("title")
-            # Update the row in the database
+            # Update all rows in the database with this linkedin_url
             cursor.execute(
                 """
                 UPDATE linkedin_engagers
                 SET company = %s, title = %s
-                WHERE id = %s
+                WHERE linkedin_url = %s
                 """,
-                (company, title, engager_id)
+                (company, title, linkedin_url)
             )
             conn.commit()
-            logger.info(f"Updated id={engager_id} with company='{company}', title='{title}'")
+            logger.info(f"Updated all rows for linkedin_url={linkedin_url} with company='{company}', title='{title}'")
         except Exception as e:
-            logger.error(f"Failed to enrich {linkedin_url} (id={engager_id}): {str(e)}")
+            logger.error(f"Failed to enrich {linkedin_url}: {str(e)}")
 
 def main():
     logger.info("Starting company/title enrichment for linkedin_engagers and company migration...")
