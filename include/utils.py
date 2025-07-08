@@ -159,8 +159,6 @@ def scrape_post_engagers(link):
     logger.info(f"Successfully processed data into DataFrame with {len(final_df)} rows")
     return final_df
 
-
-
 def ingest_scrape(df):
     """
     Ingest scraped post and engagers data into the PostgreSQL database.
@@ -633,3 +631,56 @@ def ingest_enriched_data_to_db(df):
         if conn:
             conn.close()
             logger.info("Database connection closed.")
+
+def scrape_company(url):
+    """
+    Scrapes company and title from LinkedIn profile url.
+
+    Args:
+        url: linkedin profile-url
+
+    Returns:
+        dict: Dictionary containing of the format {profile_url: str, company: str, title: str}
+    """
+    # Initialize the ApifyClient with your API token
+    client = ApifyClient(airflow_utils.get_required_env_var("APIFY_API_KEY"))
+
+    # Prepare the Actor input
+    run_input = {"username": url}
+
+    # Run the Actor and wait for it to finish
+    logger.info(f"Running actor for {url}")
+    run = client.actor("VhxlqQXRwhW8H5hNV").call(run_input=run_input)
+    items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+    logger.info(f"Run complete: received {len(items)} items")
+
+    # Extract current company and most recent job title
+    if not items:
+        logger.warning(f"No items returned from Apify for {url}")
+        return {"profile_url": url, "company": None, "title": None}
+
+    profile = items[0]
+    company = None
+    title = None
+
+    # Extract current company from basic_info if available
+    basic_info = profile.get("basic_info", {})
+    company = basic_info.get("current_company")
+
+    # Extract most recent job title from experience
+    experience = profile.get("experience", [])
+    if experience and isinstance(experience, list):
+        # Find the most recent/current job (is_current True, or first in list)
+        current_jobs = [exp for exp in experience if exp.get("is_current")]
+        if current_jobs:
+            # If there are current jobs, pick the first one
+            title = current_jobs[0].get("title")
+            if not company:
+                company = current_jobs[0].get("company")
+        else:
+            # Otherwise, pick the most recent job (first in list)
+            title = experience[0].get("title")
+            if not company:
+                company = experience[0].get("company")
+
+    return {"profile_url": url, "company": company, "title": title} 
