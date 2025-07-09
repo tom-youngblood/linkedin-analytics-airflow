@@ -13,7 +13,6 @@ google-auth-oauthlib==1.2.2
 gspread==6.2.0
 h11==0.16.0
 httpcore==1.0.9
-httpx==0.28.1
 idna==3.10
 more-itertools==10.7.0
 numpy==2.2.5
@@ -38,3 +37,7 @@ urllib3==2.4.0
 # Additional Airflow providers for the pipeline
 apache-airflow-providers-postgres
 apache-airflow-providers-http
+
+# OpenAI for audience classification
+openai==1.54.0
+httpx==0.27.2
