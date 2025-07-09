@@ -1,11 +1,13 @@
 """
 ## LinkedIn Lead Generation Pipeline DAG
 
-This DAG orchestrates the LinkedIn lead generation pipeline with four main tasks:
+This DAG orchestrates the LinkedIn lead generation pipeline with six main tasks:
 1. Google Sheets Sync: Pulls LinkedIn post data from Google Sheets into PostgreSQL
-2. Post Enrichment: Enriches posts with media details and additional metrics
-3. LinkedIn Scraping: Scrapes engagement data from LinkedIn posts using Apify
-4. HubSpot Sync: Pushes new leads from PostgreSQL to HubSpot
+2. LinkedIn Scraping: Scrapes engagement data from LinkedIn posts using Apify
+3. Company Enrichment: Enriches engagers with company and title information
+4. Post Enrichment: Enriches posts with media details and additional metrics
+5. Engager Enrichment: Classifies engagers into target audience categories using OpenAI
+6. HubSpot Sync: Pushes new leads from PostgreSQL to HubSpot
 
 The pipeline follows a sequential workflow where each task depends on the previous one.
 All database operations and state management are handled within the individual scripts.
@@ -29,8 +31,10 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'include'))
 
 # Import our pipeline scripts
 import gs_sql
-import enrich_posts
 import scrape
+import enrich_companies
+import enrich_posts
+import enrich_engagers
 import sql_hs
 
 logger = logging.getLogger(__name__)
@@ -54,9 +58,11 @@ def linkedin_lead_pipeline():
     
     This DAG orchestrates the complete workflow from Google Sheets to HubSpot:
     1. Sync LinkedIn post data from Google Sheets to PostgreSQL
-    2. Enrich posts with media details and metrics
-    3. Scrape engagement data from LinkedIn posts
-    4. Push new leads to HubSpot
+    2. Scrape engagement data from LinkedIn posts using Apify
+    3. Enrich engagers with company and title information
+    4. Enrich posts with media details and metrics
+    5. Classify engagers into target audience categories using OpenAI
+    6. Push new leads to HubSpot
     
     Schedule: Runs daily at 9 AM with random delay (9:00-10:00 AM)
     """
@@ -105,6 +111,50 @@ def linkedin_lead_pipeline():
             raise
 
     @task(
+        task_id="scrape_linkedin"
+    )
+    def scrape_linkedin_posts(**context):
+        """
+        Task to scrape LinkedIn post engagement data.
+        
+        This task:
+        - Queries database for posts that need scraping (based on scrape count and cooldown)
+        - Scrapes engagement data using Apify API
+        - Updates the scrapes table with results
+        - Handles rate limiting with random delays between scrapes
+        """
+        try:
+            logger.info("Starting LinkedIn scraping task...")
+            scrape.main()
+            logger.info("LinkedIn scraping completed successfully")
+            return {"status": "success", "message": "LinkedIn scraping completed"}
+        except Exception as e:
+            logger.error(f"LinkedIn scraping failed: {str(e)}")
+            raise
+
+    @task(
+        task_id="enrich_companies"
+    )
+    def enrich_companies_data(**context):
+        """
+        Task to enrich LinkedIn engagers with company and title information.
+        
+        This task:
+        - Migrates company profiles from engagers to a separate companies table
+        - Scrapes company and title information for engagers that need enrichment
+        - Updates the linkedin_engagers table with company and title data
+        - Handles deduplication and logging
+        """
+        try:
+            logger.info("Starting company enrichment task...")
+            enrich_companies.main()
+            logger.info("Company enrichment completed successfully")
+            return {"status": "success", "message": "Company enrichment completed"}
+        except Exception as e:
+            logger.error(f"Company enrichment failed: {str(e)}")
+            raise
+
+    @task(
         task_id="enrich_posts"
     )
     def enrich_posts_data(**context):
@@ -127,25 +177,25 @@ def linkedin_lead_pipeline():
             raise
 
     @task(
-        task_id="scrape_linkedin"
+        task_id="enrich_engagers"
     )
-    def scrape_linkedin_posts(**context):
+    def enrich_engagers_data(**context):
         """
-        Task to scrape LinkedIn post engagement data.
+        Task to enrich LinkedIn engagers with audience classification using OpenAI.
         
         This task:
-        - Queries database for posts that need scraping (based on scrape count and cooldown)
-        - Scrapes engagement data using Apify API
-        - Updates the scrapes table with results
-        - Handles rate limiting with random delays between scrapes
+        - Ensures required database columns exist (engager_audience, engager_bucketed_position)
+        - Uses OpenAI API to classify engagers into target audience categories
+        - Updates the linkedin_engagers table with audience and position classifications
+        - Handles rate limiting and error recovery
         """
         try:
-            logger.info("Starting LinkedIn scraping task...")
-            scrape.main()
-            logger.info("LinkedIn scraping completed successfully")
-            return {"status": "success", "message": "LinkedIn scraping completed"}
+            logger.info("Starting engager audience enrichment task...")
+            enrich_engagers.main()
+            logger.info("Engager audience enrichment completed successfully")
+            return {"status": "success", "message": "Engager audience enrichment completed"}
         except Exception as e:
-            logger.error(f"LinkedIn scraping failed: {str(e)}")
+            logger.error(f"Engager audience enrichment failed: {str(e)}")
             raise
 
     @task(
@@ -173,13 +223,15 @@ def linkedin_lead_pipeline():
     # Define the task dependencies - sequential execution with random delay
     # delay_result = add_random_delay()  # Commented out for testing
     sheets_result = sync_google_sheets()
-    enrichment_result = enrich_posts_data()
     scraping_result = scrape_linkedin_posts()
+    companies_result = enrich_companies_data()
+    posts_result = enrich_posts_data()
+    engagers_result = enrich_engagers_data()
     hubspot_result = sync_hubspot_leads()
     
     # Set up the dependency chain with random delay at the start
-    # delay_result >> sheets_result >> scraping_result >> enrichment_result >> hubspot_result  # Commented out for testing
-    sheets_result >> scraping_result >> enrichment_result >> hubspot_result
+    # delay_result >> sheets_result >> scraping_result >> companies_result >> posts_result >> engagers_result >> hubspot_result  # Commented out for testing
+    sheets_result >> scraping_result >> companies_result >> posts_result >> engagers_result >> hubspot_result
 
 
 # Instantiate the DAG
