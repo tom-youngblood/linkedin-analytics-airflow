@@ -2,15 +2,15 @@
 ## LinkedIn Lead Generation Pipeline DAG
 
 This DAG orchestrates the LinkedIn lead generation pipeline with six main tasks:
-1. Google Sheets Sync: Pulls LinkedIn post data from Google Sheets into PostgreSQL
-2. LinkedIn Scraping: Scrapes engagement data from LinkedIn posts using Apify
-3. Company Enrichment: Enriches engagers with company and title information
-4. Post Enrichment: Enriches posts with media details and additional metrics
-5. Engager Enrichment: Classifies engagers into target audience categories using OpenAI
-6. HubSpot Sync: Pushes new leads from PostgreSQL to HubSpot
+1. Database Schema Check: Ensures all required tables and columns exist in PostgreSQL.
+2. LinkedIn Scraping: Scrapes engagement data from LinkedIn posts using Apify.
+3. Company Enrichment: Enriches engagers with company and title information.
+4. Post Enrichment: Enriches posts with media details and additional metrics.
+5. Engager Enrichment: Classifies engagers into target audience categories using OpenAI.
+6. HubSpot Sync: Pushes new leads from PostgreSQL to HubSpot.
 
 The pipeline follows a sequential workflow where each task depends on the previous one.
-All database operations and state management are handled within the individual scripts.
+Post data is now ingested directly into the database via NocoDB, removing the need for a Google Sheets sync.
 
 Schedule: Daily at 9 AM with random delay (runs between 9:00-10:00 AM)
 
@@ -30,7 +30,7 @@ import logging
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'include'))
 
 # Import our pipeline scripts
-import gs_sql
+import setup_database
 import scrape
 import enrich_companies
 import enrich_posts
@@ -56,8 +56,8 @@ def linkedin_lead_pipeline():
     """
     Main LinkedIn Lead Generation Pipeline DAG.
     
-    This DAG orchestrates the complete workflow from Google Sheets to HubSpot:
-    1. Sync LinkedIn post data from Google Sheets to PostgreSQL
+    This DAG orchestrates the complete workflow from database setup to HubSpot:
+    1. Ensure database schema is up-to-date
     2. Scrape engagement data from LinkedIn posts using Apify
     3. Enrich engagers with company and title information
     4. Enrich posts with media details and metrics
@@ -88,26 +88,24 @@ def linkedin_lead_pipeline():
         return {"delay_seconds": delay_seconds, "delay_minutes": delay_minutes}
     
     @task(
-        task_id="google_sheets_sync"
+        task_id="ensure_database_schema"
     )
-    def sync_google_sheets(**context):
+    def ensure_database_schema(**context):
         """
-        Task to sync LinkedIn post data from Google Sheets into PostgreSQL.
+        Task to ensure the database schema is correctly set up.
         
-        This task:
-        - Connects to Google Sheets using service account credentials
-        - Retrieves LinkedIn post URLs and names from the 'LI Links' worksheet
-        - Creates/updates database tables if they don't exist
-        - Ingests new posts and updates existing ones
-        - Handles deduplication and logging
+        This task runs an idempotent script that:
+        - Creates all required tables if they don't exist.
+        - Adds any missing columns to existing tables.
+        - Ensures the database is ready for the pipeline to run.
         """
         try:
-            logger.info("Starting Google Sheets sync task...")
-            gs_sql.main()
-            logger.info("Google Sheets sync completed successfully")
-            return {"status": "success", "message": "Google Sheets sync completed"}
+            logger.info("Starting database schema setup task...")
+            setup_database.main()
+            logger.info("Database schema setup completed successfully.")
+            return {"status": "success", "message": "Database schema is up to date."}
         except Exception as e:
-            logger.error(f"Google Sheets sync failed: {str(e)}")
+            logger.error(f"Database schema setup failed: {str(e)}")
             raise
 
     @task(
@@ -222,16 +220,16 @@ def linkedin_lead_pipeline():
 
     # Define the task dependencies - sequential execution with random delay
     # delay_result = add_random_delay()  # Commented out for testing
-    sheets_result = sync_google_sheets()
+    schema_result = ensure_database_schema()
     scraping_result = scrape_linkedin_posts()
     companies_result = enrich_companies_data()
     posts_result = enrich_posts_data()
     engagers_result = enrich_engagers_data()
     hubspot_result = sync_hubspot_leads()
     
-    # Set up the dependency chain with random delay at the start
-    # delay_result >> sheets_result >> scraping_result >> companies_result >> posts_result >> engagers_result >> hubspot_result  # Commented out for testing
-    sheets_result >> scraping_result >> companies_result >> posts_result >> engagers_result >> hubspot_result
+    # Set up the dependency chain with the new schema task at the start
+    # delay_result >> schema_result >> scraping_result >> companies_result >> posts_result >> engagers_result >> hubspot_result  # Commented out for testing
+    schema_result >> scraping_result >> companies_result >> posts_result >> engagers_result >> hubspot_result
 
 
 # Instantiate the DAG
