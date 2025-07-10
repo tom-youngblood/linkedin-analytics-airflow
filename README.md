@@ -1,10 +1,14 @@
 # LinkedIn Lead Generation Pipeline (Airflow)
 
 ## Overview
-This project orchestrates a LinkedIn lead generation pipeline using [Apache Airflow](https://airflow.apache.org/) and the [Astronomer CLI](https://docs.astronomer.io/astro/cli/overview). It automates the process of syncing LinkedIn post data from Google Sheets, scraping post and engager data, enriching the data, and pushing new leads to HubSpot. The pipeline is containerized with Docker for local development and production readiness, and integrates seamlessly with PostgreSQL databases.
+This project orchestrates a LinkedIn lead generation pipeline using [Apache Airflow](https://airflow.apache.org/) and the [Astronomer CLI](https://docs.astronomer.io/astro/cli/overview). The pipeline automates the process of scraping, enriching, and classifying leads from LinkedIn, and ultimately pushes them to HubSpot.
+
+The data workflow begins with the content team inputting post information directly into a PostgreSQL database using **NocoDB** as a user-friendly interface. From there, the Airflow-managed pipeline takes over, running a series of automated tasks to process the data. The entire environment is containerized with Docker, ensuring consistency between local development and production.
 
 ## Features
 - **End-to-end orchestration** of a multi-step LinkedIn lead generation workflow
+- **Direct Database Ingestion** using NocoDB as a UI for non-technical users
+- **Idempotent Schema Management** to ensure a consistent database state
 - **Modular Python scripts** for each pipeline stage
 - **Airflow DAG** for robust scheduling, monitoring, and retry logic
 - **Secrets and configuration** managed via Airflow Variables and Connections
@@ -16,8 +20,10 @@ This project orchestrates a LinkedIn lead generation pipeline using [Apache Airf
 ├── dags/
 │   └── pipeline_dag.py         # Main Airflow DAG
 ├── include/
-│   ├── gs_sql.py               # Google Sheets → PostgreSQL sync
+│   ├── setup_database.py       # Idempotent DB schema setup
 │   ├── enrich_posts.py         # Post enrichment
+│   ├── enrich_companies.py     # Company/Title enrichment
+│   ├── enrich_engagers.py      # OpenAI audience classification
 │   ├── scrape.py               # LinkedIn scraping
 │   ├── sql_hs.py               # HubSpot sync
 │   ├── airflow_utils.py        # Env/Variable utility
@@ -32,27 +38,29 @@ This project orchestrates a LinkedIn lead generation pipeline using [Apache Airf
 ```
 
 ## Pipeline Workflow
-1. **Google Sheets Sync**: Pulls LinkedIn post data from Google Sheets into PostgreSQL
-2. **Post Enrichment**: Enriches posts with media details and additional metrics
-3. **LinkedIn Scraping**: Scrapes engagement data from LinkedIn posts using Apify
-4. **HubSpot Sync**: Pushes new leads from PostgreSQL to HubSpot
+The pipeline is orchestrated as a sequential Airflow DAG (`pipeline_dag.py`) that executes the following steps:
 
-Each step is a Python script, orchestrated as a sequential Airflow DAG (`pipeline_dag.py`).
+1.  **Database Setup**: An idempotent script (`setup_database.py`) runs first to ensure all required tables and columns exist in the PostgreSQL database. This makes the pipeline robust and self-contained.
+2.  **LinkedIn Scraping**: The pipeline scrapes LinkedIn posts (sourced from the database) for fresh engagement data (reactions, comments, etc.) using the Apify API.
+3.  **Data Enrichment (Parallel Tasks)**:
+    *   **Company & Title Enrichment**: Engager profiles are enriched with standardized company and job title information.
+    *   **Post Enrichment**: Posts are enriched with media details and other metadata.
+    *   **AI Audience Classification**: Enriched engagers are classified into target audience buckets using the OpenAI API.
+4.  **HubSpot Sync**: New, qualified leads are pushed to a designated list in HubSpot.
 
 ```mermaid
 graph TD
-    A[Google Sheets: LinkedIn Posts] --> B[Google Sheets Sync: gs_sql.py]
-    B --> C[PostgreSQL: linkedin_posts]
+    A[NocoDB UI] --> B(PostgreSQL Database);
     
-    C --> D[Post Enrichment: >enrich_posts.py]
-    D --> E[PostgreSQL: enriched_posts]
-    
-    C --> F[LinkedIn Scraping: scrape.py]
-    F --> G[Apify API: Engagement Data]
-    G --> H[PostgreSQL: linkedin_engagers]
-    
-    H -- OPTIONAL CRM INTEGRATION --> I[HubSpot Sync: sql_hs.py]
-    I --> J[HubSpot: Organic Social List]
+    subgraph Airflow Pipeline
+        direction LR
+        C(1. Setup Database) --> D(2. Scrape LinkedIn);
+        D --> E(3. Enrich Data);
+        E --> F(4. Sync to HubSpot);
+    end
+
+    B --> C;
+    F --> G[HubSpot: New Leads];
 ```
 
 ## Database Schema
