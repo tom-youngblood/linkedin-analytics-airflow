@@ -350,3 +350,45 @@ You can trigger deployments manually from the Actions tab:
 ---
 
 For questions or onboarding help, contact the project maintainer or open an issue.
+
+## Future Considerations & Professionalism Review
+
+This project is built on a solid foundation with a modern, industry-standard tech stack. The structure is modular and the DAG is well-documented. To elevate it from a functional pipeline to a production-hardened, professional-grade asset, the following areas should be prioritized for future development.
+
+### 1. Implement a Comprehensive, Automated Testing Strategy
+
+The current testing is minimal and relies on manual validation. A robust automated test suite is the highest-priority improvement.
+
+*   **Action**: Create a parallel `tests/` directory that mirrors the `include/` structure.
+*   **Best Practice**: Use `pytest` for test execution and `unittest.mock` to isolate code from external services. Tests should **never** make live API calls or connect to a production database.
+*   **Example**: A test for `enrich_companies.py` should mock the database connection and the `scrape_company` API call, run the enrichment logic on a predefined set of fake data, and assert that the logic performs as expected.
+
+### 2. Standardize Secrets and Configuration Management
+
+The use of `.env` files and hardcoded variables is suitable for local development but poses a security risk and operational burden in production.
+
+*   **Action**: Migrate all secrets (API keys, passwords) and environment-specific configurations to a secure **Airflow Backend**.
+*   **Best Practice**: Use Airflow Connections for service credentials (PostgreSQL, HubSpot, etc.) and Airflow Variables for other configurations. This centralizes management and enhances security.
+
+### 3. Refactor Core Logic for Atomicity and Idempotency
+
+The scripts in the `include/` directory often perform multiple operations (e.g., schema checks, data fetching, row-by-row processing, and database updates) within a single run. This is risky, as a failure can leave the database in an inconsistent, partially-updated state.
+
+*   **Action**: Refactor the core logic to perform batch-based, atomic operations.
+*   **Best Practice**:
+    *   **Atomic Updates**: Instead of a `for` loop that updates one row at a time, process all enrichments in memory and write the results back to the database in a single, bulk transaction. This ensures that either all updates succeed or none do.
+    *   **Separate Migrations**: Move schema checks (`ALTER TABLE`, `CREATE TABLE`) into a separate, dedicated migration task or use a tool like Alembic. Business logic should not be responsible for altering database schemas.
+
+### 4. Enforce Code Quality with Linting and Formatting
+
+The project currently lacks automated code quality checks, leading to potential inconsistencies.
+
+*   **Action**: Integrate a modern linter and formatter like `Ruff`.
+*   **Best Practice**: Configure rules in a `pyproject.toml` file and enforce them automatically using a pre-commit hook and a CI/CD pipeline. This ensures all code adheres to a consistent style and quality standard.
+
+### 5. Enhance CI/CD for Automated Validation
+
+The existing CI/CD is a great start. It can be enhanced by integrating the recommendations above.
+
+*   **Action**: Add steps to the `ci-cd.yml` workflow to run the new automated test suite and the linter/formatter on every pull request and merge to `main`.
+*   **Best Practice**: A merge should be blocked if any tests or linting checks fail, ensuring that no broken or low-quality code reaches the main branches.
