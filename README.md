@@ -50,17 +50,17 @@ The pipeline is orchestrated as a sequential Airflow DAG (`pipeline_dag.py`) tha
 
 ```mermaid
 graph TD
-    A[NocoDB UI] --> B(PostgreSQL Database);
+    A[NocoDB UI] --> B[PostgreSQL Database]
     
     subgraph Airflow Pipeline
-        direction LR
-        C["1. Setup Database"] --> D["2. Scrape LinkedIn"];
-        D --> E["3. Enrich Data"];
-        E --> F["4. Sync to HubSpot"];
+      direction LR
+        C["Setup Database"] --> D["Scrape LinkedIn"]
+        D --> E["Enrich Data"]
+        E --> F["Sync to HubSpot"]
     end
 
-    B --> C;
-    F --> G[HubSpot: New Leads];
+    B --> C
+    F --> G[HubSpot: New Leads]
 ```
 
 ## Database Schema
