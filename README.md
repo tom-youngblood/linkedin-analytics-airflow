@@ -54,9 +54,9 @@ graph TD
     
     subgraph Airflow Pipeline
         direction LR
-        C(1. Setup Database) --> D(2. Scrape LinkedIn);
-        D --> E(3. Enrich Data);
-        E --> F(4. Sync to HubSpot);
+        C["1. Setup Database"] --> D["2. Scrape LinkedIn"];
+        D --> E["3. Enrich Data"];
+        E --> F["4. Sync to HubSpot"];
     end
 
     B --> C;
