@@ -14,40 +14,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def ensure_columns_exist(cursor):
-    # Add 'company' column if it doesn't exist
-    cursor.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name='linkedin_engagers' AND column_name='company'
-            ) THEN
-                ALTER TABLE linkedin_engagers ADD COLUMN company TEXT;
-            END IF;
-        END$$;
-    """)
-    # Add 'title' column if it doesn't exist
-    cursor.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name='linkedin_engagers' AND column_name='title'
-            ) THEN
-                ALTER TABLE linkedin_engagers ADD COLUMN title TEXT;
-            END IF;
-        END$$;
-    """)
 
-def ensure_companies_table_exists(cursor):
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS linkedin_companies (
-            id SERIAL PRIMARY KEY,
-            company_name TEXT,
-            company_url TEXT UNIQUE
-        );
-    """)
 
 def migrate_companies_from_engagers(cursor, conn):
     # Find all company profiles in engagers
@@ -117,9 +84,6 @@ def main():
     conn = get_db_connection()
     cursor = get_db_cursor(conn)
     try:
-        ensure_columns_exist(cursor)
-        ensure_companies_table_exists(cursor)
-        conn.commit()
         migrate_companies_from_engagers(cursor, conn)
         unenriched_df = get_unenriched_engagers(cursor)
         logger.info(f"Found {len(unenriched_df)} engagers to enrich.")

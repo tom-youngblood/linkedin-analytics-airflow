@@ -30,37 +30,7 @@ if not OPENAI_API_KEY:
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 logger.info("OpenAI client configured successfully")
 
-def ensure_required_columns_exist(cursor):
-    """
-    Ensure the engager_audience and engager_bucketed_position columns exist in the linkedin_engagers table.
-    """
-    # Ensure engager_audience column exists
-    cursor.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name='linkedin_engagers' AND column_name='engager_audience'
-            ) THEN
-                ALTER TABLE linkedin_engagers ADD COLUMN engager_audience TEXT;
-            END IF;
-        END$$;
-    """)
-    
-    # Ensure engager_bucketed_position column exists
-    cursor.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
-                WHERE table_name='linkedin_engagers' AND column_name='engager_bucketed_position'
-            ) THEN
-                ALTER TABLE linkedin_engagers ADD COLUMN engager_bucketed_position TEXT;
-            END IF;
-        END$$;
-    """)
-    
-    logger.info("Ensured engager_audience and engager_bucketed_position columns exist in linkedin_engagers table")
+
 
 def get_unenriched_engagers(cursor):
     """
@@ -248,10 +218,6 @@ def main():
         # Connect to database
         conn = get_db_connection()
         cursor = get_db_cursor(conn)
-        
-        # Ensure the engager_audience column exists
-        ensure_required_columns_exist(cursor)
-        conn.commit()
         
         # Get engagers that need enrichment
         unenriched_df = get_unenriched_engagers(cursor)
