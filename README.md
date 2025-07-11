@@ -39,30 +39,6 @@ This dual-source approach allows for:
 
 ---
 
-## NocoDB Integration
-
-- **NocoDB** provides a no-code, spreadsheet-like interface for non-technical users (e.g., creative teams) to input new LinkedIn posts to scrape and to manage custom post-level fields such as:
-  - `target_audience`
-  - `post_type` (short form, long form, carousel, image, etc.)
-  - `sentiment`
-  - and more
-
-This makes the pipeline highly accessible and flexible for rapid campaign iteration.
-
----
-
-## Pipeline Workflow
-
-The pipeline is orchestrated as an Airflow DAG with the following steps:
-
-1. **Database Schema Setup**: Ensures all required tables and columns exist (idempotent).
-2. **LinkedIn Scraping**: Scrapes posts and engagement data from LinkedIn using Apify.
-3. **Post Enrichment**: Enriches posts with media details and custom fields.
-4. **Sync to HubSpot**: Pushes new/updated contacts to HubSpot, ensuring contact-level truth.
-5. **Enrich HubSpot Contacts**: Uses OpenAI and Apify to fill in missing company, title, and audience data for HubSpot contacts.
-
----
-
 ## High-Level Pipeline Overview
 
 ```mermaid
@@ -108,6 +84,30 @@ flowchart LR
 - Prioritization: posts never scraped are scraped first, then by most recent.
 
 ---
+
+## NocoDB Integration
+
+- **NocoDB** provides a no-code, spreadsheet-like interface for non-technical users (e.g., creative teams) to input new LinkedIn posts to scrape and to manage custom post-level fields such as:
+  - `target_audience`
+  - `post_type` (short form, long form, carousel, image, etc.)
+  - `sentiment`
+  - and more
+
+This makes the pipeline highly accessible and flexible for rapid campaign iteration.
+
+---
+
+## Pipeline Workflow
+
+The pipeline is orchestrated as an Airflow DAG with the following steps:
+
+1. **Database Schema Setup**: Ensures all required tables and columns exist (idempotent).
+2. **LinkedIn Scraping**: Scrapes posts and engagement data from LinkedIn using Apify.
+3. **Post Enrichment**: Enriches posts with media details and custom fields.
+4. **Sync to HubSpot**: Pushes new/updated contacts to HubSpot, ensuring contact-level truth.
+5. **Enrich HubSpot Contacts**: Uses OpenAI and Apify to fill in missing company, title, and audience data for HubSpot contacts.
+
+
 
 ## Setup & Usage
 
