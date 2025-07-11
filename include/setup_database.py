@@ -70,9 +70,12 @@ DDL_QUERIES = [
         FOREIGN KEY (post_url) REFERENCES linkedin_posts(post_url)
     );
     """,
-    # 4. Create linkedin_engagers table
+    # 4. Rename old table if it exists
+    "ALTER TABLE IF EXISTS linkedin_engagers RENAME TO linkedin_engagers_by_post;",
+
+    # 5. Create the new, simplified linkedin_engagers_by_post table
     """
-    CREATE TABLE IF NOT EXISTS linkedin_engagers (
+    CREATE TABLE IF NOT EXISTS linkedin_engagers_by_post (
         id SERIAL PRIMARY KEY,
         scrape_id INTEGER,
         linkedin_url TEXT,
@@ -85,20 +88,15 @@ DDL_QUERIES = [
         UNIQUE(linkedin_url, post_url)
     );
     """,
-    # 5. Add enrichment columns to linkedin_engagers
-    "ALTER TABLE linkedin_engagers ADD COLUMN IF NOT EXISTS company TEXT;",
-    "ALTER TABLE linkedin_engagers ADD COLUMN IF NOT EXISTS title TEXT;",
-    "ALTER TABLE linkedin_engagers ADD COLUMN IF NOT EXISTS engager_audience TEXT;",
-    "ALTER TABLE linkedin_engagers ADD COLUMN IF NOT EXISTS engager_bucketed_position TEXT;",
+    
+    # 6. Drop old enrichment columns from the renamed table if they exist
+    "ALTER TABLE linkedin_engagers_by_post DROP COLUMN IF EXISTS company;",
+    "ALTER TABLE linkedin_engagers_by_post DROP COLUMN IF EXISTS title;",
+    "ALTER TABLE linkedin_engagers_by_post DROP COLUMN IF EXISTS engager_audience;",
+    "ALTER TABLE linkedin_engagers_by_post DROP COLUMN IF EXISTS engager_bucketed_position;",
 
-    # 6. Create linkedin_companies table
-    """
-    CREATE TABLE IF NOT EXISTS linkedin_companies (
-        id SERIAL PRIMARY KEY,
-        company_name TEXT,
-        company_url TEXT UNIQUE
-    );
-    """
+    # 7. Drop the redundant companies table
+    "DROP TABLE IF EXISTS linkedin_companies;"
 ]
 
 def main():

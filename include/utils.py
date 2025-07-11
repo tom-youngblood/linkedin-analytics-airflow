@@ -130,6 +130,10 @@ def scrape_post_engagers(link):
     
     logger.info(f"Total items collected: {len(all_items)}")
     
+    # If no items were collected, return an empty DataFrame
+    if not all_items:
+        return pd.DataFrame()
+
     # Convert the list of dictionaries to a DataFrame
     df = pd.DataFrame(all_items)
     
@@ -228,19 +232,15 @@ def ingest_scrape(df):
             headline = row.reactor_headline
             if linkedin_url and "/in/" in linkedin_url:
                 cursor.execute("""
-                    INSERT INTO linkedin_engagers (scrape_id, linkedin_url, name, headline, engagement_type, post_url)
+                    INSERT INTO linkedin_engagers_by_post (scrape_id, linkedin_url, name, headline, engagement_type, post_url)
                     VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (linkedin_url, post_url) DO NOTHING
                 """, (scrape_id, linkedin_url, name, headline, engagement_type, post_url))
                 engager_count += 1
             elif linkedin_url and "/company/" in linkedin_url:
-                cursor.execute("""
-                    INSERT INTO linkedin_companies (company_name, company_url)
-                    VALUES (%s, %s)
-                    ON CONFLICT (company_url) DO NOTHING
-                """, (name, linkedin_url))
-                company_count += 1
-        logger.info(f"Processed {engager_count} engagers and {company_count} companies")
+                # This part is no longer needed as we are not storing companies in RDS
+                pass
+        logger.info(f"Processed {engager_count} engagers.")
 
         # Commit the transaction
         conn.commit()
@@ -276,13 +276,19 @@ def hubspot_fetch_list_contacts(api_key, url, properties):
     }
 
     contacts = []
+    # Base parameters
     params = {
         "count": 100
     }
+    
+    # Add properties to the request URL by creating a query string
+    # The v1 API expects multiple 'property' parameters, e.g., &property=firstname&property=lastname
+    property_params = "&".join([f"property={prop}" for prop in properties])
+    request_url = f"{url}?{property_params}"
 
     while True:
         logger.info(f"Fetching batch of contacts with offset: {params.get('vidOffset', 'initial')}")
-        response = requests.get(url, headers=headers, params=params)
+        response = requests.get(request_url, headers=headers, params=params)
 
         if response.status_code != 200:
             logger.error(f"Error fetching contacts: {response.status_code}, {response.text}")
@@ -438,6 +444,30 @@ def hubspot_update_contact(api_key, contact_id, company, jobtitle):
     response = requests.patch(url, headers=headers, json=data)
     if response.status_code == 200:
         logger.info(f"Updated HubSpot contact {contact_id} with company='{company}', jobtitle='{jobtitle}'")
+        return True
+    else:
+        logger.error(f"Failed to update HubSpot contact {contact_id}: {response.status_code}, {response.text}")
+        return False
+
+def hubspot_update_contact_fields(api_key, contact_id, update_fields):
+    """
+    Update a HubSpot contact with multiple fields using a dictionary.
+    Args:
+        api_key: HubSpot API key (str)
+        contact_id: HubSpot contact id (str)
+        update_fields: Dictionary of field names and values to update
+    Returns:
+        True if updated, False otherwise
+    """
+    url = f"https://api.hubapi.com/crm/v3/objects/contacts/{contact_id}"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    data = {"properties": update_fields}
+    response = requests.patch(url, headers=headers, json=data)
+    if response.status_code == 200:
+        logger.info(f"Updated HubSpot contact {contact_id} with fields: {list(update_fields.keys())}")
         return True
     else:
         logger.error(f"Failed to update HubSpot contact {contact_id}: {response.status_code}, {response.text}")
@@ -605,13 +635,19 @@ def finalize_enrichment_output(unenriched_posts_df, media_enrichment_df):
     # Clean the URLs in unenriched_posts_df for matching
     unenriched_posts_df['url_clean'] = unenriched_posts_df['post_url'].str.split('?').str[0]
 
+    # Rename the post_url column in media_enrichment_df to avoid conflicts
+    media_enrichment_df_renamed = media_enrichment_df.rename(columns={'post_url': 'media_post_url'})
+
     # Now merge on the cleaned URL
     merged = unenriched_posts_df.merge(
-        media_enrichment_df,
+        media_enrichment_df_renamed,
         left_on='url_clean',
-        right_on='post_url',
+        right_on='media_post_url',
         how='left'
     )
+
+    # Drop the temporary columns used for merging
+    merged = merged.drop(['url_clean', 'media_post_url'], axis=1)
 
     logger.info(f"Merge complete. Final DataFrame has {len(merged)} rows.")
     return merged

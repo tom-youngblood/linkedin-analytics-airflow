@@ -43,15 +43,20 @@ def main():
         SELECT p.post_url
         FROM linkedin_posts p
         WHERE
+          -- Scrape posts up to 5 times
           p.scrape_count < 5
+          -- And it hasn't been scraped in the last 2 days (or ever)
           AND (
             p.last_scraped_at IS NULL
             OR p.last_scraped_at < NOW() - INTERVAL '2 days'
           )
+          -- But, do NOT scrape posts that have 0 reactions after being scraped twice already
+          AND NOT (p.total_reactions = 0 AND p.scrape_count >= 2)
         ORDER BY
-          CASE WHEN p.last_scraped_at IS NULL THEN 0 ELSE 1 END,  -- never scraped first
+          -- Prioritize posts that have never been scraped
+          CASE WHEN p.last_scraped_at IS NULL THEN 0 ELSE 1 END,
           p.id DESC
-        LIMIT 5
+        LIMIT 5;
         """
     )
     logger.info("Queried five most recent posts with scrape count < 3 and 2-day cooldown")
@@ -69,7 +74,7 @@ def main():
                 f"Pre-scrape state for {row['link']}",
                 """
                 SELECT p.post_url, p.scrape_count, p.total_reactions, 
-                       (SELECT COUNT(*) FROM linkedin_engagers e WHERE e.post_url = p.post_url) as engager_count
+                       (SELECT COUNT(*) FROM linkedin_engagers_by_post e WHERE e.post_url = p.post_url) as engager_count
                 FROM linkedin_posts p
                 WHERE p.post_url = %s
                 """,
@@ -79,6 +84,19 @@ def main():
             # Scrape posts
             post_scrape = utils.scrape_post_engagers(row["link"])
             logger.info(f"Post Scraped: {row['link']}")
+
+            if post_scrape.empty:
+                logger.info(f"No engagers found for post {row['link']}. Skipping ingestion.")
+                # Optionally, update the post to mark it as scraped with 0 reactions
+                cursor.execute("""
+                    UPDATE linkedin_posts
+                    SET last_scraped_at = NOW(),
+                        scrape_count = scrape_count + 1,
+                        total_reactions = 0
+                    WHERE post_url = %s
+                """, (row['link'],))
+                conn.commit()
+                continue
 
             # Ingest posts to PostgreSQL DB
             utils.ingest_scrape(post_scrape) 
@@ -90,7 +108,7 @@ def main():
                 f"Post-scrape state for {row['link']}",
                 """
                 SELECT p.post_url, p.scrape_count, p.total_reactions, 
-                       (SELECT COUNT(*) FROM linkedin_engagers e WHERE e.post_url = p.post_url) as engager_count
+                       (SELECT COUNT(*) FROM linkedin_engagers_by_post e WHERE e.post_url = p.post_url) as engager_count
                 FROM linkedin_posts p
                 WHERE p.post_url = %s
                 """,
@@ -98,14 +116,14 @@ def main():
             )
             
             # Add random wait time between scrapes (between 30 and 60 seconds)
-            wait_time = random.uniform(30, 60)
+            wait_time = random.uniform(10, 20)
             logger.info(f"Waiting {wait_time:.2f} seconds before next scrape...")
             time.sleep(wait_time)
             
         except Exception as e:
             logger.error(f"Error processing post {row['link']}: {str(e)}")
             # Add a longer wait time after an error (between 60 and 120 seconds)
-            wait_time = random.uniform(60, 120)
+            wait_time = random.uniform(10, 20)
             logger.info(f"Error occurred. Waiting {wait_time:.2f} seconds before next attempt...")
             time.sleep(wait_time)
             continue
@@ -121,7 +139,7 @@ def main():
             SUM(p.total_reactions) as total_reactions,
             COUNT(DISTINCT e.linkedin_url) as total_engagers
         FROM linkedin_posts p
-        LEFT JOIN linkedin_engagers e ON p.post_url = e.post_url
+        LEFT JOIN linkedin_engagers_by_post e ON p.post_url = e.post_url
         """
     )
 
