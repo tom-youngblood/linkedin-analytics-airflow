@@ -214,6 +214,15 @@ def main():
     for _, row in contacts_to_enrich.iterrows():
         contact_id = row.get("vid") or row.get("id")
         linkedin_url = row.get("hs_linkedin_url") or row.get("linkedin_url")
+
+        # Normalize contact_id to string without decimals
+        if contact_id is not None:
+            if isinstance(contact_id, float) and contact_id.is_integer():
+                contact_id = str(int(contact_id))
+            else:
+                contact_id = str(contact_id)
+        else:
+            continue
         
         if not linkedin_url:
             continue
