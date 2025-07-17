@@ -129,6 +129,116 @@ def classify_audience_with_openai(company, title, name=None, headline=None):
         logger.error(f"Error classifying audience for {company}/{title}: {str(e)}")
         return "Other", "Other"
 
+def enrich_company_and_title(hs_api_key, contacts_df, list_id):
+    """
+    Enrich contacts with company and title information using Apify scraping.
+    Only processes contacts that are missing company or title.
+    """
+    # Only enrich contacts missing company or title
+    def needs_company_title_enrichment(row):
+        return (pd.isnull(row.get("company")) or row.get("company") == "" or 
+                pd.isnull(row.get("jobtitle")) or row.get("jobtitle") == "")
+    
+    contacts_needing_company_title = contacts_df[contacts_df.apply(needs_company_title_enrichment, axis=1)]
+    
+    if len(contacts_needing_company_title) > 50:  # Limit to 50 for company/title enrichment
+        logger.info(f"Limiting company/title enrichment to 50 out of {len(contacts_needing_company_title)} contacts needing company/title.")
+        contacts_needing_company_title = contacts_needing_company_title.head(50)
+    else:
+        logger.info(f"Enriching company/title for {len(contacts_needing_company_title)} contacts in HubSpot list {list_id}.")
+    
+    update_count = 0
+    for _, row in contacts_needing_company_title.iterrows():
+        contact_id = row.get("vid") or row.get("id")
+        linkedin_url = row.get("hs_linkedin_url") or row.get("linkedin_url")
+
+        # Normalize contact_id to string without decimals
+        if contact_id is not None:
+            if isinstance(contact_id, float) and contact_id.is_integer():
+                contact_id = str(int(contact_id))
+            else:
+                contact_id = str(contact_id)
+        else:
+            continue
+        
+        if not linkedin_url:
+            continue
+
+        # Enrich company and title using Apify
+        company_info = utils.scrape_company(linkedin_url)
+        company = company_info.get("company")
+        title = company_info.get("title")
+
+        update_fields = {}
+        if pd.notnull(company) and company and company != row.get("company"):
+            update_fields["company"] = company
+        if pd.notnull(title) and title and title != row.get("jobtitle"):
+            update_fields["jobtitle"] = title
+
+        if update_fields and contact_id:
+            utils.hubspot_update_contact_fields(hs_api_key, contact_id, update_fields)
+            update_count += 1
+            logger.info(f"Updated company/title for contact {contact_id}: {update_fields}")
+            
+    logger.info(f"Updated company/title for {update_count} HubSpot contacts in list {list_id}.")
+    return update_count
+
+def enrich_audience_classification(hs_api_key, contacts_df, list_id):
+    """
+    Enrich contacts with audience and position classification using OpenAI.
+    Only processes contacts that have company and title but are missing audience or position.
+    """
+    # Only enrich contacts that have company AND title but are missing audience or position
+    def needs_audience_enrichment(row):
+        has_company_title = (pd.notnull(row.get("company")) and row.get("company") != "" and 
+                           pd.notnull(row.get("jobtitle")) and row.get("jobtitle") != "")
+        missing_audience_position = (pd.isnull(row.get("engager_audience")) or row.get("engager_audience") == "" or 
+                                   pd.isnull(row.get("engager_bucketed_position")) or row.get("engager_bucketed_position") == "")
+        return has_company_title and missing_audience_position
+    
+    contacts_needing_audience = contacts_df[contacts_df.apply(needs_audience_enrichment, axis=1)]
+    
+    if len(contacts_needing_audience) > 1000:  # Limit to 50 for audience enrichment
+        logger.info(f"Limiting audience classification to 50 out of {len(contacts_needing_audience)} contacts needing audience classification.")
+        contacts_needing_audience = contacts_needing_audience.head(50)
+    else:
+        logger.info(f"Enriching audience classification for {len(contacts_needing_audience)} contacts in HubSpot list {list_id}.")
+    
+    update_count = 0
+    for _, row in contacts_needing_audience.iterrows():
+        contact_id = row.get("vid") or row.get("id")
+        company = row.get("company")
+        title = row.get("jobtitle")
+
+        # Normalize contact_id to string without decimals
+        if contact_id is not None:
+            if isinstance(contact_id, float) and contact_id.is_integer():
+                contact_id = str(int(contact_id))
+            else:
+                contact_id = str(contact_id)
+        else:
+            continue
+        
+        if not company or not title:
+            continue
+
+        # Enrich audience using OpenAI (no need to scrape again)
+        audience, position = classify_audience_with_openai(company, title, row.get("name"), row.get("headline"))
+
+        update_fields = {}
+        if pd.notnull(audience) and audience and audience != row.get("engager_audience"):
+            update_fields["engager_audience"] = audience
+        if pd.notnull(position) and position and position != row.get("engager_bucketed_position"):
+            update_fields["engager_bucketed_position"] = position
+
+        if update_fields and contact_id:
+            utils.hubspot_update_contact_fields(hs_api_key, contact_id, update_fields)
+            update_count += 1
+            logger.info(f"Updated audience classification for contact {contact_id}: {update_fields}")
+            
+    logger.info(f"Updated audience classification for {update_count} HubSpot contacts in list {list_id}.")
+    return update_count
+
 def main():
     # Load Environment variables (for backward compatibility)
     logger.info("Loading environment variables")
@@ -196,64 +306,28 @@ def main():
         hubspot_contacts_df = utils.hubspot_fetch_list_contacts(hs_api_key, url, properties)
         logger.info(f"Re-fetched {len(hubspot_contacts_df)} HubSpot contacts after upload.")
 
-    # 4. Enrich all contacts in the list
+    # 4. Enrich all contacts in the list using separate processes
     all_contacts_df = pd.concat([hubspot_contacts_df, engagers_to_upload]) if not engagers_to_upload.empty else hubspot_contacts_df
 
-    # Only enrich contacts missing at least one of the target fields
-    fields_to_check = ["company", "jobtitle", "engager_audience", "engager_bucketed_position"]
-    def needs_enrichment(row):
-        return any(pd.isnull(row[field]) or row[field] == "" for field in fields_to_check)
-    contacts_to_enrich = all_contacts_df[all_contacts_df.apply(needs_enrichment, axis=1)]
-    if len(contacts_to_enrich) > 100:
-        logger.info(f"Limiting enrichment to 100 out of {len(contacts_to_enrich)} contacts needing enrichment.")
-        contacts_to_enrich = contacts_to_enrich.head(100)
-    else:
-        logger.info(f"Enriching {len(contacts_to_enrich)} contacts in HubSpot list {list_id} that are missing at least one target field.")
-
-    update_count = 0
-    for _, row in contacts_to_enrich.iterrows():
-        contact_id = row.get("vid") or row.get("id")
-        linkedin_url = row.get("hs_linkedin_url") or row.get("linkedin_url")
-
-        # Normalize contact_id to string without decimals
-        if contact_id is not None:
-            if isinstance(contact_id, float) and contact_id.is_integer():
-                contact_id = str(int(contact_id))
-            else:
-                contact_id = str(contact_id)
-        else:
-            continue
-        
-        if not linkedin_url:
-            continue
-
-        # Enrich company and title
-        company_info = utils.scrape_company(linkedin_url)
-        company = company_info.get("company")
-        title = company_info.get("title")
-
-        # Enrich audience
-        audience, position = classify_audience_with_openai(company, title, row.get("name"), row.get("headline"))
-
-        update_fields = {}
-        if pd.notnull(company) and company and company != row.get("company"):
-            update_fields["company"] = company
-        if pd.notnull(title) and title and title != row.get("jobtitle"):
-            update_fields["jobtitle"] = title
-        if pd.notnull(audience) and audience and audience != row.get("engager_audience"):
-            update_fields["engager_audience"] = audience
-        if pd.notnull(position) and position and position != row.get("engager_bucketed_position"):
-            update_fields["engager_bucketed_position"] = position
-
-        if update_fields and contact_id:
-            utils.hubspot_update_contact_fields(hs_api_key, contact_id, update_fields)
-            update_count += 1
-            
-    logger.info(f"Updated {update_count} HubSpot contacts in list {list_id} with new enrichment info.")
+    # Step 1: Enrich company and title (Apify scraping)
+    logger.info("Starting company and title enrichment process...")
+    company_title_updates = enrich_company_and_title(hs_api_key, all_contacts_df, list_id)
+    
+    # Step 2: Re-fetch contacts to get updated company/title data for audience classification
+    if company_title_updates > 0:
+        logger.info("Re-fetching HubSpot contacts after company/title updates for audience classification...")
+        all_contacts_df = utils.hubspot_fetch_list_contacts(hs_api_key, url, properties)
+    
+    # Step 3: Enrich audience classification (OpenAI)
+    logger.info("Starting audience classification enrichment process...")
+    audience_updates = enrich_audience_classification(hs_api_key, all_contacts_df, list_id)
+    
+    total_updates = company_title_updates + audience_updates
+    logger.info(f"Total enrichment completed: {company_title_updates} company/title updates, {audience_updates} audience classification updates.")
 
     cursor.close()
     conn.close()
-    logger.info("HubSpot contact enrichment completed successfully.")
+    logger.info(f"HubSpot contact enrichment completed successfully. Total updates: {total_updates}")
 
 if __name__ == "__main__":
     main() 
