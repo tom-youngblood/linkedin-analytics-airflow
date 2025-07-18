@@ -199,7 +199,7 @@ def enrich_audience_classification(hs_api_key, contacts_df, list_id):
     contacts_needing_audience = contacts_df[contacts_df.apply(needs_audience_enrichment, axis=1)]
     
     if len(contacts_needing_audience) > 1000:  # Limit to 50 for audience enrichment
-        logger.info(f"Limiting audience classification to 50 out of {len(contacts_needing_audience)} contacts needing audience classification.")
+        logger.info(f"Limiting audience classification to 1000 out of {len(contacts_needing_audience)} contacts needing audience classification.")
         contacts_needing_audience = contacts_needing_audience.head(50)
     else:
         logger.info(f"Enriching audience classification for {len(contacts_needing_audience)} contacts in HubSpot list {list_id}.")
