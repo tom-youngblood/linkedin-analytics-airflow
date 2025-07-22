@@ -1,4 +1,4 @@
-# LinkedIn Organic Social Pipeline
+# LinkedIn Analytics Pipeline
 
 ## High-Level Overview
 
